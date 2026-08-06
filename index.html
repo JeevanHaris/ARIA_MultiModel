@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ARIA — AI Voice Desktop Assistant</title>
   <meta name="description"
-    content="ARIA — AI Voice Desktop Assistant powered by Llama 3.2. Features voice commands, chat, tools, memory, calculator and notepad.">
+    content="ARIA — AI Voice Desktop Assistant. Features voice commands, chat, tools, memory, calculator and notepad.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link
     href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap"
@@ -17,6 +17,12 @@
 <body>
   <div class="bg-grid"></div>
   <div class="bg-glow"></div>
+
+  <!-- ══ WEBTHREADS BACKGROUND ══ -->
+  <canvas id="webThreadsCanvas"
+    style="position:fixed; top:0; left:0; width:100vw; height:100vh; z-index:-2; pointer-events:none; background: #090c10;"></canvas>
+
+
 
   <!-- ══ VOICE LISTENING OVERLAY ══ -->
   <div class="listen-overlay" id="listen-overlay">
@@ -164,7 +170,7 @@
       </nav>
       <div class="sidebar-status">
         <div class="status-dot" id="status-dot"></div>
-        <span>Llama 3.2</span>
+        <span>ARIA</span>
         <span class="status-tag" id="api-status">Ready</span>
       </div>
     </aside>
@@ -176,7 +182,7 @@
         <div class="panel-header">
           <div>
             <h1 class="panel-title">Assistant</h1>
-            <p class="panel-sub">Powered by Llama 3.2 · Open Source AI · <span id="msg-count">0</span> messages</p>
+            <p class="panel-sub">Open Source AI · <span id="msg-count">0</span> messages</p>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
             <button class="mic-pill" id="chat-mic-btn" onclick="toggleListening()" title="Press Space to activate">
@@ -199,12 +205,7 @@
         </div>
         <div class="chat-window" id="chat-window">
           <div class="chat-welcome" id="chat-welcome">
-            <div class="welcome-orb">
-              <div class="orb-ring r1"></div>
-              <div class="orb-ring r2"></div>
-              <div class="orb-ring r3"></div>
-              <div class="orb-core"></div>
-            </div>
+
             <h2>Hello, I'm ARIA</h2>
             <p>Your Adaptive Reasoning Intelligence Assistant.<br>
               Press <kbd>Space</kbd> or click <strong>Speak</strong> to give a voice command.</p>
@@ -428,7 +429,8 @@
             <p class="panel-sub">Upload a file &amp; ask questions about its content</p>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
-            <button class="icon-btn" id="doc-clear-btn" onclick="clearDocSession()" title="Clear document" style="display:none">
+            <button class="icon-btn" id="doc-clear-btn" onclick="clearDocSession()" title="Clear document"
+              style="display:none">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                 <polyline points="3 6 5 6 21 6" />
                 <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
@@ -440,8 +442,7 @@
 
         <!-- Upload zone (shown when no doc loaded) -->
         <div class="doc-upload-zone" id="doc-upload-zone">
-          <div class="doc-drop-area" id="doc-drop-area"
-            onclick="document.getElementById('doc-file-input').click()"
+          <div class="doc-drop-area" id="doc-drop-area" onclick="document.getElementById('doc-file-input').click()"
             ondragover="docDragOver(event)" ondragleave="docDragLeave(event)" ondrop="docDrop(event)">
             <div class="doc-drop-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48">
@@ -459,8 +460,8 @@
               <span class="doc-badge">MD</span>
             </div>
           </div>
-          <input type="file" id="doc-file-input" accept=".pdf,.txt,.docx,.md,.markdown,.rst,.csv"
-            style="display:none" onchange="handleDocFileSelect(event)" />
+          <input type="file" id="doc-file-input" accept=".pdf,.txt,.docx,.md,.markdown,.rst,.csv" style="display:none"
+            onchange="handleDocFileSelect(event)" />
           <div class="doc-upload-status" id="doc-upload-status"></div>
         </div>
 
@@ -495,7 +496,8 @@
               <div class="quick-prompts" style="margin-top:16px">
                 <button class="quick-btn" onclick="sendDocQuick('Summarize this document')">📋 Summarize</button>
                 <button class="quick-btn" onclick="sendDocQuick('What are the key points?')">🔑 Key Points</button>
-                <button class="quick-btn" onclick="sendDocQuick('What is this document about?')">❓ What is this?</button>
+                <button class="quick-btn" onclick="sendDocQuick('What is this document about?')">❓ What is
+                  this?</button>
                 <button class="quick-btn" onclick="sendDocQuick('List the main topics covered')">📑 Main Topics</button>
               </div>
             </div>
@@ -620,7 +622,7 @@
             <div class="about-block">
               <p>ARIA Desktop Assistant v2.0 — Voice Edition</p>
               <p>Built with HTML · CSS · JavaScript + Python Flask</p>
-              <p>AI: Llama 3.2 · Voice: Web Speech API</p>
+              <p>AI Model · Voice: Web Speech API</p>
               <p>Voice commands: 30+ actions supported · Free &amp; open-source AI</p>
             </div>
           </div>
@@ -630,6 +632,12 @@
     </main>
   </div>
 
+  <script src="webthreads.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      new WebThreads("webThreadsCanvas");
+    });
+  </script>
   <script src="app.js"></script>
 </body>
 

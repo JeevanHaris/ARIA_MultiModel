@@ -24,6 +24,9 @@ import os
 import sys
 import uuid
 import automation
+import json
+import zipfile
+import urllib.request
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -216,39 +219,6 @@ def warm_up():
         print(f"[WARNING] Make sure you've run: ollama pull {DEFAULT_MODEL}")
 
 
-# ─── Run ──────────────────────────────────────────────
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    ollama_status = "RUNNING" if _ollama_available() else "NOT REACHABLE"
-    print(f"""
-+--------------------------------------------------+
-|   ARIA v2.0 Backend - Ollama (Local, Offline)    |
-+--------------------------------------------------+
-|  URL:      http://localhost:{port}                  |
-|  Ollama:   {ollama_status:<38} |
-|  Provider: Ollama - 100% local, no internet      |
-|  Model:    {DEFAULT_MODEL:<38} |
-+--------------------------------------------------+
-|  Endpoints:                                      |
-|    GET  /                -> health check         |
-|    GET  /api/models      -> list models          |
-|    POST /api/chat        -> chat with AI         |
-|    POST /api/tool        -> one-shot tool        |
-|    POST /api/upload-doc  -> upload document      |
-|    POST /api/doc-query   -> query document       |
-+--------------------------------------------------+
-
-Open index.html in Chrome/Edge to start ARIA.
-""")
-    if _ollama_available():
-        warm_up()
-    else:
-        print("[WARNING] Could not reach Ollama. Is it installed and running?")
-        print("[WARNING] Install: https://ollama.com/download  |  Then: ollama pull llama3.2")
-
-    app.run(host="0.0.0.0", port=port, debug=True)
-
-
 # ─── Document Upload ──────────────────────────────────
 def _extract_text(filename: str, file_bytes: bytes) -> str:
     """Extract plain text from PDF, DOCX, TXT, or MD file bytes."""
@@ -377,3 +347,36 @@ def doc_query():
         return jsonify({"error": f"Ollama error: {str(e)}"}), 502
     except Exception as e:
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+
+
+# ─── Run ──────────────────────────────────────────────
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    ollama_status = "RUNNING" if _ollama_available() else "NOT REACHABLE"
+    print(f"""
++--------------------------------------------------+
+|   ARIA v2.0 Backend - Ollama (Local, Offline)    |
++--------------------------------------------------+
+|  URL:      http://localhost:{port}                  |
+|  Ollama:   {ollama_status:<38} |
+|  Provider: Ollama - 100% local, no internet      |
+|  Model:    {DEFAULT_MODEL:<38} |
++--------------------------------------------------+
+|  Endpoints:                                      |
+|    GET  /                -> health check         |
+|    GET  /api/models      -> list models          |
+|    POST /api/chat        -> chat with AI         |
+|    POST /api/tool        -> one-shot tool        |
+|    POST /api/upload-doc  -> upload document      |
+|    POST /api/doc-query   -> query document       |
++--------------------------------------------------+
+
+Open index.html in Chrome/Edge to start ARIA.
+""")
+    if _ollama_available():
+        warm_up()
+    else:
+        print("[WARNING] Could not reach Ollama. Is it installed and running?")
+        print("[WARNING] Install: https://ollama.com/download  |  Then: ollama pull llama3.2")
+
+    app.run(host="0.0.0.0", port=port, debug=True)
