@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ARIA — AI Voice Desktop Assistant</title>
+  <meta name="description"
+    content="ARIA — AI Voice Desktop Assistant powered by Llama 3.2. Features voice commands, chat, tools, memory, calculator and notepad.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+
+  <!-- ══ VOICE LISTENING OVERLAY ══ -->
+  <div class="listen-overlay" id="listen-overlay">
+    <div class="listen-orb">
+      <div class="lo-ring lr1"></div>
+      <div class="lo-ring lr2"></div>
+      <div class="lo-ring lr3"></div>
+      <div class="lo-core">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="32" height="32">
+          <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+          <path d="M19 10v2a7 7 0 01-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="23" />
+          <line x1="8" y1="23" x2="16" y2="23" />
+        </svg>
+      </div>
+    </div>
+    <div class="listen-label" id="listen-label">Listening…</div>
+    <div class="listen-transcript" id="listen-transcript">Say a command or ask me anything…</div>
+    <div class="listen-wave">
+      <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <button class="listen-cancel" onclick="stopListening()">✕ Cancel</button>
+  </div>
+
+  <!-- ══ ACTION FLASH ══ -->
+  <div class="action-flash" id="action-flash"></div>
+
+  <!-- ══ TIMER NOTIFICATION ══ -->
+  <div class="notif" id="timer-notif" style="display:none">
+    <div class="notif-icon">⏱️</div>
+    <div><strong>Timer Done!</strong>
+      <p id="timer-msg">Your timer has ended.</p>
+    </div>
+    <button onclick="document.getElementById('timer-notif').style.display='none'">✕</button>
+  </div>
+
+  <!-- ══ CALCULATOR MODAL ══ -->
+  <div class="modal-overlay" id="calc-modal" style="display:none">
+    <div class="calc-box">
+      <div class="calc-header"><span>🧮 Calculator</span><button
+          onclick="document.getElementById('calc-modal').style.display='none'">✕</button></div>
+      <div class="calc-display" id="calc-display">0</div>
+      <div class="calc-expr" id="calc-expr"></div>
+      <div class="calc-grid">
+        <button class="calc-btn calc-fn wide2" onclick="calcClear()">AC</button>
+        <button class="calc-btn calc-fn" onclick="calcToggleSign()">+/−</button>
+        <button class="calc-btn calc-op" onclick="calcInput('/')">÷</button>
+        <button class="calc-btn calc-num" onclick="calcNum('7')">7</button>
+        <button class="calc-btn calc-num" onclick="calcNum('8')">8</button>
+        <button class="calc-btn calc-num" onclick="calcNum('9')">9</button>
+        <button class="calc-btn calc-op" onclick="calcInput('*')">×</button>
+        <button class="calc-btn calc-num" onclick="calcNum('4')">4</button>
+        <button class="calc-btn calc-num" onclick="calcNum('5')">5</button>
+        <button class="calc-btn calc-num" onclick="calcNum('6')">6</button>
+        <button class="calc-btn calc-op" onclick="calcInput('-')">−</button>
+        <button class="calc-btn calc-num" onclick="calcNum('1')">1</button>
+        <button class="calc-btn calc-num" onclick="calcNum('2')">2</button>
+        <button class="calc-btn calc-num" onclick="calcNum('3')">3</button>
+        <button class="calc-btn calc-op" onclick="calcInput('+')">+</button>
+        <button class="calc-btn calc-num wide2" onclick="calcNum('0')">0</button>
+        <button class="calc-btn calc-num" onclick="calcDot()">.</button>
+        <button class="calc-btn calc-eq" onclick="calcEquals()">=</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ NOTEPAD MODAL ══ -->
+  <div class="modal-overlay" id="notepad-modal" style="display:none">
+    <div class="notepad-box">
+      <div class="calc-header">
+        <span>📝 Notepad</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="run-btn" onclick="copyNote()" style="padding:5px 12px;font-size:12px">Copy</button>
+          <button class="run-btn" onclick="clearNote()"
+            style="padding:5px 12px;font-size:12px;background:var(--surface3);color:var(--text-mid)">Clear</button>
+          <button onclick="document.getElementById('notepad-modal').style.display='none'"
+            style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:18px">✕</button>
+        </div>
+      </div>
+      <textarea id="notepad-area" placeholder="Start typing your notes here…"></textarea>
+    </div>
+  </div>
+
+  <!-- ══ SHELL ══ -->
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="logo-orb">
+          <svg viewBox="0 0 40 40" fill="none">
+            <circle cx="20" cy="20" r="18" stroke="var(--accent)" stroke-width="1.5" />
+            <circle cx="20" cy="20" r="10" fill="var(--accent)" fill-opacity="0.15" />
+            <circle cx="20" cy="20" r="4" fill="var(--accent)" />
+            <line x1="20" y1="2" x2="20" y2="10" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" />
+            <line x1="20" y1="30" x2="20" y2="38" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" />
+            <line x1="2" y1="20" x2="10" y2="20" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" />
+            <line x1="30" y1="20" x2="38" y2="20" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+        </div>
+        <span class="logo-text">ARIA</span>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-btn active" data-tab="chat" onclick="switchTab('chat',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+          </svg><span>Chat</span>
+        </button>
+        <button class="nav-btn" data-tab="voice" onclick="switchTab('voice',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+            <path d="M19 10v2a7 7 0 01-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
+          </svg><span>Voice</span>
+        </button>
+        <button class="nav-btn" data-tab="tools" onclick="switchTab('tools',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="2" y="3" width="20" height="14" rx="2" />
+            <line x1="8" y1="21" x2="16" y2="21" />
+            <line x1="12" y1="17" x2="12" y2="21" />
+          </svg><span>Tools</span>
+        </button>
+        <button class="nav-btn" data-tab="memory" onclick="switchTab('memory',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <ellipse cx="12" cy="5" rx="9" ry="3" />
+            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+          </svg><span>Memory</span>
+        </button>
+        <button class="nav-btn" data-tab="docs" onclick="switchTab('docs',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <polyline points="10 9 9 9 8 9" />
+          </svg><span>Docs</span>
+        </button>
+        <button class="nav-btn" data-tab="settings" onclick="switchTab('settings',this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+          </svg><span>Settings</span>
+        </button>
+      </nav>
+      <div class="sidebar-status">
+        <div class="status-dot" id="status-dot"></div>
+        <span>Llama 3.2</span>
+        <span class="status-tag" id="api-status">Ready</span>
+      </div>
+    </aside>
+
+    <main class="main">
+
+      <!-- ══ CHAT TAB ══ -->
+      <section class="tab-panel active" id="tab-chat">
+        <div class="panel-header">
+          <div>
+            <h1 class="panel-title">Assistant</h1>
+            <p class="panel-sub">Powered by Llama 3.2 · Open Source AI · <span id="msg-count">0</span> messages</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="mic-pill" id="chat-mic-btn" onclick="toggleListening()" title="Press Space to activate">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+                <path d="M19 10v2a7 7 0 01-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+              <span>Speak</span>
+            </button>
+            <button class="icon-btn" onclick="clearChat()" title="Clear chat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+                <path d="M10 11v6M14 11v6" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="chat-window" id="chat-window">
+          <div class="chat-welcome" id="chat-welcome">
+            <div class="welcome-orb">
+              <div class="orb-ring r1"></div>
+              <div class="orb-ring r2"></div>
+              <div class="orb-ring r3"></div>
+              <div class="orb-core"></div>
+            </div>
+            <h2>Hello, I'm ARIA</h2>
+            <p>Your Adaptive Reasoning Intelligence Assistant.<br>
+              Press <kbd>Space</kbd> or click <strong>Speak</strong> to give a voice command.</p>
+            <div class="quick-prompts">
+              <button class="quick-btn" onclick="runVoiceCommand('open youtube')">📺 Open YouTube</button>
+              <button class="quick-btn" onclick="runVoiceCommand('open calculator')">🧮 Calculator</button>
+              <button class="quick-btn" onclick="runVoiceCommand('what is the time')">🕐 What time is it?</button>
+              <button class="quick-btn" onclick="runVoiceCommand('set a timer for 30 seconds')">⏱ Timer 30s</button>
+              <button class="quick-btn" onclick="runVoiceCommand('open notepad')">📝 Notepad</button>
+              <button class="quick-btn" onclick="runVoiceCommand('search for weather today')">🔍 Web Search</button>
+              <button class="quick-btn" onclick="runVoiceCommand('tell me a joke')">😂 Tell a Joke</button>
+              <button class="quick-btn" onclick="runVoiceCommand('flip a coin')">🪙 Flip a Coin</button>
+            </div>
+          </div>
+        </div>
+        <div class="input-zone">
+          <div class="input-row">
+            <textarea id="user-input" placeholder="Type a message or press Space / Speak button to use voice…" rows="1"
+              onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+            <button class="send-btn" id="send-btn" onclick="sendMessage()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          </div>
+          <div class="input-meta">
+            <span>Enter to send · Shift+Enter new line · <kbd>Space</kbd> to activate mic</span>
+            <span id="tts-indicator" style="color:var(--accent);display:none">🔊 Speaking…</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ VOICE COMMANDS TAB ══ -->
+      <section class="tab-panel" id="tab-voice">
+        <div class="panel-header">
+          <div>
+            <h1 class="panel-title">Voice Commands</h1>
+            <p class="panel-sub">Speak to control · Click any chip to try</p>
+          </div>
+          <button class="mic-pill" id="voice-tab-mic" onclick="toggleListening()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+              <path d="M19 10v2a7 7 0 01-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+            <span>Activate Voice</span>
+          </button>
+        </div>
+        <div class="voice-page">
+          <div class="big-mic-wrap">
+            <button class="big-mic" id="big-mic" onclick="toggleListening()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48">
+                <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+                <path d="M19 10v2a7 7 0 01-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+              <span id="big-mic-label">Tap to Speak</span>
+            </button>
+            <p class="big-mic-hint">or press <kbd>Space</kbd> from any tab</p>
+          </div>
+
+          <div class="vc-categories">
+            <div class="vc-cat">
+              <div class="vc-cat-title">🌐 Open Websites</div>
+              <div class="vc-chips">
+                <div class="vc-chip" onclick="runVoiceCommand('open youtube')">📺 Open YouTube</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open google')">🔎 Open Google</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open gmail')">📧 Open Gmail</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open github')">💻 Open GitHub</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open netflix')">🎥 Open Netflix</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open spotify')">🎵 Open Spotify</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open wikipedia')">📖 Open Wikipedia</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open twitter')">🐦 Open Twitter</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open whatsapp web')">💬 WhatsApp Web</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open chatgpt')">🤖 Open ChatGPT</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open maps')">🗺️ Open Maps</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open amazon')">🛒 Open Amazon</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open reddit')">🟠 Open Reddit</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open linkedin')">💼 Open LinkedIn</div>
+              </div>
+            </div>
+            <div class="vc-cat">
+              <div class="vc-cat-title">🧮 Built-in Apps</div>
+              <div class="vc-chips">
+                <div class="vc-chip" onclick="runVoiceCommand('open calculator')">🧮 Calculator</div>
+                <div class="vc-chip" onclick="runVoiceCommand('open notepad')">📝 Notepad</div>
+              </div>
+            </div>
+            <div class="vc-cat">
+              <div class="vc-cat-title">🔍 Search</div>
+              <div class="vc-chips">
+                <div class="vc-chip" onclick="runVoiceCommand('search for artificial intelligence')">🔍 Search topic
+                </div>
+                <div class="vc-chip" onclick="runVoiceCommand('search youtube for lofi music')">🎧 YouTube search</div>
+                <div class="vc-chip" onclick="runVoiceCommand('search for weather in Chennai')">🌤️ Search weather</div>
+                <div class="vc-chip" onclick="runVoiceCommand('search for python tutorials')">🐍 Search tutorials</div>
+              </div>
+            </div>
+            <div class="vc-cat">
+              <div class="vc-cat-title">⏱ Time &amp; Timers</div>
+              <div class="vc-chips">
+                <div class="vc-chip" onclick="runVoiceCommand('what is the time')">🕐 What time is it?</div>
+                <div class="vc-chip" onclick="runVoiceCommand('what is today date')">📅 Today's date</div>
+                <div class="vc-chip" onclick="runVoiceCommand('set a timer for 10 seconds')">⏱ Timer 10s</div>
+                <div class="vc-chip" onclick="runVoiceCommand('set a timer for 1 minute')">⏱ Timer 1 min</div>
+                <div class="vc-chip" onclick="runVoiceCommand('set a timer for 5 minutes')">⏱ Timer 5 min</div>
+                <div class="vc-chip" onclick="runVoiceCommand('set a timer for 25 minutes')">🍅 Pomodoro 25m</div>
+              </div>
+            </div>
+            <div class="vc-cat">
+              <div class="vc-cat-title">🎲 Fun &amp; Utilities</div>
+              <div class="vc-chips">
+                <div class="vc-chip" onclick="runVoiceCommand('tell me a joke')">😂 Tell a Joke</div>
+                <div class="vc-chip" onclick="runVoiceCommand('flip a coin')">🪙 Flip a Coin</div>
+                <div class="vc-chip" onclick="runVoiceCommand('roll a dice')">🎲 Roll a Dice</div>
+                <div class="vc-chip" onclick="runVoiceCommand('motivate me')">💪 Motivate Me</div>
+                <div class="vc-chip" onclick="runVoiceCommand('random number')">🎯 Random Number</div>
+                <div class="vc-chip" onclick="runVoiceCommand('what is the weather today')">🌦 Weather</div>
+              </div>
+            </div>
+            <div class="vc-cat">
+              <div class="vc-cat-title">🎛 Assistant Control</div>
+              <div class="vc-chips">
+                <div class="vc-chip" onclick="runVoiceCommand('stop speaking')">🔇 Stop Speaking</div>
+                <div class="vc-chip" onclick="runVoiceCommand('clear chat')">🗑️ Clear Chat</div>
+                <div class="vc-chip" onclick="runVoiceCommand('go to settings')">⚙️ Go to Settings</div>
+                <div class="vc-chip" onclick="runVoiceCommand('go to tools')">🛠 Go to Tools</div>
+                <div class="vc-chip" onclick="runVoiceCommand('read last message')">📢 Read Last Msg</div>
+                <div class="vc-chip" onclick="runVoiceCommand('what can you do')">❓ What can you do?</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ TOOLS TAB ══ -->
+      <section class="tab-panel" id="tab-tools">
+        <div class="panel-header">
+          <div>
+            <h1 class="panel-title">Quick Tools</h1>
+            <p class="panel-sub">AI-powered utility functions</p>
+          </div>
+        </div>
+        <div class="tools-grid">
+          <div class="tool-card" onclick="runTool('summarize')">
+            <div class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <line x1="21" y1="10" x2="7" y2="10" />
+                <line x1="21" y1="6" x2="3" y2="6" />
+                <line x1="21" y1="14" x2="3" y2="14" />
+                <line x1="21" y1="18" x2="7" y2="18" />
+              </svg></div>
+            <h3>Summarize</h3>
+            <p>Condense long text into clear summaries</p>
+          </div>
+          <div class="tool-card" onclick="runTool('translate')">
+            <div class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M5 8l6 6" />
+                <path d="M4 14l6-6 2-3" />
+                <path d="M2 5h12" />
+                <path d="M7 2h1" />
+                <path d="M22 22l-5-10-5 10" />
+                <path d="M14 18h6" />
+              </svg></div>
+            <h3>Translate</h3>
+            <p>Translate text into any language</p>
+          </div>
+          <div class="tool-card" onclick="runTool('codereview')">
+            <div class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <polyline points="16 18 22 12 16 6" />
+                <polyline points="8 6 2 12 8 18" />
+              </svg></div>
+            <h3>Code Review</h3>
+            <p>Analyze and improve code quality</p>
+          </div>
+          <div class="tool-card" onclick="runTool('grammar')">
+            <div class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+              </svg></div>
+            <h3>Grammar Fix</h3>
+            <p>Correct grammar, spelling and style</p>
+          </div>
+          <div class="tool-card" onclick="runTool('explain')">
+            <div class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg></div>
+            <h3>Explain</h3>
+            <p>Break complex topics into simple terms</p>
+          </div>
+          <div class="tool-card" onclick="runTool('brainstorm')">
+            <div class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+              </svg></div>
+            <h3>Brainstorm</h3>
+            <p>Generate creative ideas and solutions</p>
+          </div>
+        </div>
+        <div class="tool-modal" id="tool-modal" style="display:none">
+          <div class="tool-modal-inner">
+            <div class="tool-modal-header">
+              <h3 id="tool-modal-title">Tool</h3><button class="icon-btn" onclick="closeToolModal()">✕</button>
+            </div>
+            <textarea id="tool-input" placeholder="Paste your text here..." rows="6"></textarea>
+            <div class="tool-modal-row"><input type="text" id="tool-extra" style="display:none" /><button
+                class="run-btn" onclick="executeTool()">Run Tool</button></div>
+            <div class="tool-output" id="tool-output" style="display:none"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ DOCS TAB ══ -->
+      <section class="tab-panel" id="tab-docs">
+        <div class="panel-header">
+          <div>
+            <h1 class="panel-title">Document Q&amp;A</h1>
+            <p class="panel-sub">Upload a file &amp; ask questions about its content</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="icon-btn" id="doc-clear-btn" onclick="clearDocSession()" title="Clear document" style="display:none">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+                <path d="M10 11v6M14 11v6" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Upload zone (shown when no doc loaded) -->
+        <div class="doc-upload-zone" id="doc-upload-zone">
+          <div class="doc-drop-area" id="doc-drop-area"
+            onclick="document.getElementById('doc-file-input').click()"
+            ondragover="docDragOver(event)" ondragleave="docDragLeave(event)" ondrop="docDrop(event)">
+            <div class="doc-drop-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </div>
+            <h3>Drop your document here</h3>
+            <p>or click to browse</p>
+            <div class="doc-type-badges">
+              <span class="doc-badge">PDF</span>
+              <span class="doc-badge">TXT</span>
+              <span class="doc-badge">DOCX</span>
+              <span class="doc-badge">MD</span>
+            </div>
+          </div>
+          <input type="file" id="doc-file-input" accept=".pdf,.txt,.docx,.md,.markdown,.rst,.csv"
+            style="display:none" onchange="handleDocFileSelect(event)" />
+          <div class="doc-upload-status" id="doc-upload-status"></div>
+        </div>
+
+        <!-- Doc chat area (shown after doc loaded) -->
+        <div class="doc-chat-container" id="doc-chat-container" style="display:none">
+          <!-- Doc info banner -->
+          <div class="doc-info-banner" id="doc-info-banner">
+            <div class="doc-info-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+              </svg>
+            </div>
+            <div class="doc-info-text">
+              <span class="doc-info-name" id="doc-info-name">document.pdf</span>
+              <span class="doc-info-chars" id="doc-info-chars"></span>
+            </div>
+            <button class="doc-remove-btn" onclick="clearDocSession()" title="Remove document">✕ Remove</button>
+          </div>
+          <!-- Doc messages -->
+          <div class="chat-window" id="doc-chat-window">
+            <div class="doc-chat-welcome" id="doc-chat-welcome">
+              <div class="doc-welcome-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              </div>
+              <h3>Document loaded!</h3>
+              <p>Ask any question about your document below.</p>
+              <div class="quick-prompts" style="margin-top:16px">
+                <button class="quick-btn" onclick="sendDocQuick('Summarize this document')">📋 Summarize</button>
+                <button class="quick-btn" onclick="sendDocQuick('What are the key points?')">🔑 Key Points</button>
+                <button class="quick-btn" onclick="sendDocQuick('What is this document about?')">❓ What is this?</button>
+                <button class="quick-btn" onclick="sendDocQuick('List the main topics covered')">📑 Main Topics</button>
+              </div>
+            </div>
+          </div>
+          <!-- Doc input -->
+          <div class="input-zone">
+            <div class="input-row">
+              <textarea id="doc-input" placeholder="Ask a question about your document…" rows="1"
+                onkeydown="handleDocKey(event)" oninput="autoResize(this)"></textarea>
+              <button class="send-btn" id="doc-send-btn" onclick="sendDocMessage()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              </button>
+            </div>
+            <div class="input-meta">
+              <span>Enter to send · Shift+Enter new line</span>
+              <span id="doc-tts-indicator" style="color:var(--accent);display:none">🔊 Speaking…</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ MEMORY TAB ══ -->
+      <section class="tab-panel" id="tab-memory">
+        <div class="panel-header">
+          <div>
+            <h1 class="panel-title">Memory</h1>
+            <p class="panel-sub">Context stored in this session</p>
+          </div><button class="icon-btn" onclick="clearMemory()"><svg viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="1.8">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+            </svg></button>
+        </div>
+        <div class="memory-list" id="memory-list">
+          <div class="memory-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+              width="40">
+              <ellipse cx="12" cy="5" rx="9" ry="3" />
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+            </svg>
+            <p>No memory entries yet.<br>Memories are created from your conversations.</p>
+          </div>
+        </div>
+        <div class="memory-add"><input type="text" id="memory-input" placeholder="Add a custom memory..." /><button
+            class="run-btn" onclick="addMemory()">Add</button></div>
+      </section>
+
+      <!-- ══ SETTINGS TAB ══ -->
+      <section class="tab-panel" id="tab-settings">
+        <div class="panel-header">
+          <div>
+            <h1 class="panel-title">Settings</h1>
+            <p class="panel-sub">Configure your assistant</p>
+          </div>
+        </div>
+        <div class="settings-list">
+          <div class="settings-section">
+            <h4>AI Configuration</h4>
+            <div class="setting-row"><label>AI Model</label>
+              <select id="model-select" onchange="saveSettings()">
+                <option value="llama-3.3-70b-versatile">Llama 3.3 70B (Best Quality)</option>
+                <option value="llama-3.1-8b-instant">Llama 3.1 8B (Fastest)</option>
+                <option value="mixtral-8x7b-32768">Mixtral 8x7B (Great for Code)</option>
+                <option value="gemma2-9b-it">Gemma 2 9B (Google)</option>
+                <option value="deepseek-r1-distill-llama-70b">DeepSeek R1 70B (Reasoning)</option>
+              </select>
+            </div>
+            <div class="setting-row"><label>Max Tokens</label><input type="number" id="max-tokens" value="1024"
+                min="256" max="4096" step="256" onchange="saveSettings()" /></div>
+          </div>
+          <div class="settings-section">
+            <h4>Voice Settings</h4>
+            <div class="setting-row"><label>Voice Replies</label><label class="toggle-switch"><input type="checkbox"
+                  id="voice-enabled" checked onchange="saveSettings()" /><span class="toggle-slider"></span></label>
+            </div>
+            <div class="setting-row"><label>Speed <span id="rate-val">1.0</span>x</label><input type="range"
+                id="voice-rate" min="0.5" max="2" step="0.1" value="1" style="min-width:140px"
+                oninput="document.getElementById('rate-val').textContent=parseFloat(this.value).toFixed(1);saveSettings()" />
+            </div>
+            <div class="setting-row"><label>Pitch <span id="pitch-val">1.0</span></label><input type="range"
+                id="voice-pitch" min="0.5" max="2" step="0.1" value="1" style="min-width:140px"
+                oninput="document.getElementById('pitch-val').textContent=parseFloat(this.value).toFixed(1);saveSettings()" />
+            </div>
+            <div class="setting-row"><label>Voice</label><select id="voice-select" onchange="saveSettings()"
+                style="min-width:190px">
+                <option>Loading…</option>
+              </select></div>
+            <div class="setting-row"><label></label><button class="run-btn" onclick="testVoice()">🔊 Test Voice</button>
+            </div>
+          </div>
+          <div class="settings-section">
+            <h4>Persona</h4>
+            <div class="setting-row"><label>Assistant Name</label><input type="text" id="assistant-name" value="ARIA"
+                onchange="saveSettings()" /></div>
+            <div class="setting-row"><label>System Prompt</label></div>
+            <textarea id="system-prompt" rows="5"
+              onchange="saveSettings()">You are ARIA (Adaptive Reasoning Intelligence Assistant), a helpful and concise AI desktop assistant. When acknowledging voice commands like opening websites or apps, keep your reply to 1 short sentence. For questions and conversations, be clear and helpful. Use markdown for code or lists.</textarea>
+          </div>
+          <div class="settings-section">
+            <h4>Appearance</h4>
+            <div class="setting-row"><label>Accent Color</label>
+              <div class="color-swatches">
+                <button class="swatch active" style="background:#00e5ff" onclick="setAccent('#00e5ff',this)"></button>
+                <button class="swatch" style="background:#ff6b6b" onclick="setAccent('#ff6b6b',this)"></button>
+                <button class="swatch" style="background:#a78bfa" onclick="setAccent('#a78bfa',this)"></button>
+                <button class="swatch" style="background:#34d399" onclick="setAccent('#34d399',this)"></button>
+                <button class="swatch" style="background:#fb923c" onclick="setAccent('#fb923c',this)"></button>
+                <button class="swatch" style="background:#f472b6" onclick="setAccent('#f472b6',this)"></button>
+              </div>
+            </div>
+            <div class="setting-row"><label>Font Size</label><select id="font-size" onchange="applyFontSize()">
+                <option value="13px">Small</option>
+                <option value="15px" selected>Medium</option>
+                <option value="17px">Large</option>
+              </select></div>
+          </div>
+          <div class="settings-section">
+            <h4>About</h4>
+            <div class="about-block">
+              <p>ARIA Desktop Assistant v2.0 — Voice Edition</p>
+              <p>Built with HTML · CSS · JavaScript + Python Flask</p>
+              <p>AI: Llama 3.2 · Voice: Web Speech API</p>
+              <p>Voice commands: 30+ actions supported · Free &amp; open-source AI</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
