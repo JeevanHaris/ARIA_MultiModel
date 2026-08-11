@@ -29,6 +29,7 @@ import zipfile
 import urllib.request
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_sock import Sock
 
 # Force UTF-8 output on Windows to avoid UnicodeEncodeError with box-drawing chars
 if sys.platform == "win32":
@@ -41,11 +42,75 @@ except ImportError:
     print("[ERROR] ollama not installed. Run: pip install ollama")
     exit(1)
 
+try:
+    import vosk
+except ImportError:
+    print("[ERROR] vosk not installed. Run: pip install vosk flask-sock")
+    vosk = None
+
 # ─── App Setup ────────────────────────────────────────
 app = Flask(__name__)
 CORS(app)  # Allow all origins for local development
+sock = Sock(app)
 
 DEFAULT_MODEL = os.environ.get("ARIA_MODEL", "llama3.2")
+
+# ─── Vosk Setup ────────────────────────────────────────
+VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip"
+VOSK_MODEL_DIR = "vosk-model-en-us-0.22-lgraph"
+
+def setup_vosk():
+    if not vosk: return None
+    if not os.path.exists(VOSK_MODEL_DIR):
+        print("[INFO] Downloading high-accuracy Vosk model (this might take a few minutes)...")
+        zip_path = "vosk-model.zip"
+        if not os.path.exists(zip_path):
+            urllib.request.urlretrieve(VOSK_MODEL_URL, zip_path)
+        print("[INFO] Extracting model...")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(".")
+        if os.path.exists(zip_path):
+            try:
+                os.remove(zip_path)
+            except:
+                pass
+        print("[INFO] Model ready.")
+    vosk.SetLogLevel(-1) # Disable verbose logs
+    return vosk.Model(VOSK_MODEL_DIR)
+
+vosk_model = None
+try:
+    vosk_model = setup_vosk()
+except Exception as e:
+    print(f"[WARN] Failed to setup Vosk model: {e}")
+
+@sock.route('/api/stt_stream')
+def stt_stream(ws):
+    if vosk_model is None:
+        ws.send(json.dumps({"error": "Vosk model not loaded"}))
+        return
+    rec = vosk.KaldiRecognizer(vosk_model, 16000)
+    while True:
+        try:
+            data = ws.receive()
+            if data:
+                if type(data) is bytes:
+                    if rec.AcceptWaveform(data):
+                        res = json.loads(rec.Result())
+                        if res.get("text"):
+                            ws.send(json.dumps({"final": True, "text": res.get("text")}))
+                    else:
+                        partial = json.loads(rec.PartialResult())
+                        if partial.get("partial"):
+                            ws.send(json.dumps({"final": False, "text": partial.get("partial")}))
+                else:
+                    # Received text (like STOP command)
+                    break
+            else:
+                break
+        except Exception as e:
+            print(f"[ERROR] STT Stream error: {e}")
+            break
 
 # ─── In-memory document store ──────────────────────────
 # { doc_id: { "filename": str, "text": str } }
