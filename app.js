@@ -6,15 +6,24 @@
 // ─── Config ──────────────────────────────────────────────────
 const BACKEND_URL      = 'http://localhost:5000/api/chat';
 const ORCHESTRATE_URL  = 'http://localhost:5000/api/orchestrate';
+const AGENT_URL        = 'http://localhost:5000/api/agent';
 const MODELS_URL       = 'http://localhost:5000/api/models';
 const UPLOAD_DOC_URL   = 'http://localhost:5000/api/upload-doc';
 const DOC_QUERY_URL    = 'http://localhost:5000/api/doc-query';
+const DOC_EDIT_URL     = 'http://localhost:5000/api/doc-edit';
+const DOC_DOWNLOAD_URL = 'http://localhost:5000/api/doc-download';
+const AGENT_DL_URL     = 'http://localhost:5000/api/agent/download';
 const STT_URL          = 'http://localhost:5000/api/stt';
+const MEMORY_UPLOAD_URL  = 'http://localhost:5000/api/memory/upload';
+const MEMORY_DOCS_URL    = 'http://localhost:5000/api/memory/docs';
+const MEMORY_PROMOTE_URL = 'http://localhost:5000/api/memory/promote';
+const MEMORY_CLEAR_URL   = 'http://localhost:5000/api/memory/clear';
 
 // ─── State ───────────────────────────────────────────────────
 const state = {
   history: [],
   memories: [],
+  memoryDocs: [],
   msgCount: 0,
   isLoading: false,
   isListening: false,
@@ -31,6 +40,7 @@ const state = {
     charCount: 0,
     history: [],   // Q&A turns for this document session
     isLoading: false,
+    downloadToken: null,  // latest edit download token
   },
   settings: {
     model: 'llama3.2',
@@ -46,6 +56,7 @@ const state = {
   },
   ttsMuted: true,  // starts muted — browsers block autoplay until user gesture
   deepThink: false, // when true, sends to /api/orchestrate instead of /api/chat
+  agentRunning: false,
 };
 
 // ─── WEBSITE MAP ─────────────────────────────────────────────
@@ -329,7 +340,8 @@ async function sendToAIWithTyping(text) {
       removeTyping(typingId);
       const reply = data.content || data.text || JSON.stringify(data);
       const routing = data.routing || null;
-      appendMessage('assistant', reply, routing);
+      const memorySources = data.memory_sources || null;
+      appendMessage('assistant', reply, routing, memorySources);
       state.history.push({ role: 'assistant', content: reply });
       speakText(stripMarkdown(reply));
       autoExtractMemory(text, reply);
@@ -761,7 +773,7 @@ function toggleDeepThink() {
 }
 
 // ─── RENDER MESSAGES ──────────────────────────────────
-function appendMessage(role, content, routing) {
+function appendMessage(role, content, routing, memorySources) {
   const win = document.getElementById('chat-window');
   const div = document.createElement('div');
   div.className = `message ${role}`;
@@ -775,11 +787,19 @@ function appendMessage(role, content, routing) {
     routingBadge = `<span class="routing-badge" title="${routing.reason || ''}">${taskIcon} ${routing.model}</span>`;
   }
 
+  // Build memory sources badges
+  let sourcesHtml = '';
+  if (role === 'assistant' && memorySources && memorySources.length > 0) {
+    sourcesHtml = `<div class="msg-memory-sources">` +
+      memorySources.map(s => `<span class="memory-source-pill" onclick="previewMemoryDoc('${s.doc_id}')" title="Relevance score: ${s.score}\n\nMatched Context:\n${escHtml(s.excerpt)}">📄 Context: ${escHtml(s.filename)}</span>`).join('') +
+      `</div>`;
+  }
+
   div.innerHTML = `
     <div class="msg-avatar">${avatar}</div>
     <div class="msg-body">
       <div class="msg-label">${label} ${routingBadge}</div>
-      <div class="msg-bubble">${renderMarkdown(content)}</div>
+      <div class="msg-bubble">${renderMarkdown(content)}${sourcesHtml}</div>
     </div>`;
   win.appendChild(div);
   win.scrollTop = win.scrollHeight;
@@ -810,6 +830,13 @@ function appendOrchestratorResult(result) {
     stepsHtml += '</div>';
   }
 
+  let sourcesHtml = '';
+  if (result.memory_sources && result.memory_sources.length > 0) {
+    sourcesHtml = `<div class="msg-memory-sources">` +
+      result.memory_sources.map(s => `<span class="memory-source-pill" onclick="previewMemoryDoc('${s.doc_id}')" title="Relevance score: ${s.score}\n\nMatched Context:\n${escHtml(s.excerpt)}">📄 Context: ${escHtml(s.filename)}</span>`).join('') +
+      `</div>`;
+  }
+
   const synthesis = result.synthesis || result.error || 'No result generated.';
 
   div.innerHTML = `
@@ -817,7 +844,7 @@ function appendOrchestratorResult(result) {
     <div class="msg-body">
       <div class="msg-label">${state.settings.assistantName} <span class="routing-badge deep-think-badge">🧠 Deep Think</span></div>
       ${stepsHtml}
-      <div class="msg-bubble">${renderMarkdown(synthesis)}</div>
+      <div class="msg-bubble">${renderMarkdown(synthesis)}${sourcesHtml}</div>
     </div>`;
   win.appendChild(div);
   win.scrollTop = win.scrollHeight;
@@ -940,41 +967,443 @@ async function executeTool() {
 document.addEventListener('click', e => { if (e.target.id === 'tool-modal') closeToolModal(); });
 
 // ─── MEMORY ───────────────────────────────────────────
+// ─── MEMORY & KNOWLEDGE BASE ──────────────────────────
+let currentMemoryFilter = 'all';
+let memorySearchQuery   = '';
+
+function setMemoryFilter(filter, btn) {
+  currentMemoryFilter = filter;
+  document.querySelectorAll('.mem-pill-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+
+  const docsSection = document.getElementById('memory-docs-section');
+  const factsSection = document.getElementById('memory-facts-section');
+  if (docsSection) {
+    docsSection.style.display = (filter === 'all' || filter === 'docs') ? 'flex' : 'none';
+  }
+  if (factsSection) {
+    factsSection.style.display = (filter === 'all' || filter === 'facts') ? 'flex' : 'none';
+  }
+}
+
+function filterMemories(q) {
+  memorySearchQuery = (q || '').trim().toLowerCase();
+  const clearBtn = document.getElementById('memory-search-clear');
+  if (clearBtn) clearBtn.style.display = memorySearchQuery ? 'block' : 'none';
+  renderMemoryDocs();
+  renderMemories();
+}
+
+function clearMemorySearch() {
+  const input = document.getElementById('memory-search-input');
+  if (input) input.value = '';
+  filterMemories('');
+}
+
+function updateMemoryStats() {
+  const docCount  = state.memoryDocs.length;
+  const factCount = state.memories.length;
+
+  const pillDoc = document.getElementById('pill-doc-count');
+  if (pillDoc) pillDoc.textContent = docCount;
+
+  const pillFact = document.getElementById('pill-fact-count');
+  if (pillFact) pillFact.textContent = factCount;
+
+  const badgeDoc = document.getElementById('memory-doc-count');
+  if (badgeDoc) badgeDoc.textContent = `${docCount} ${docCount === 1 ? 'document' : 'documents'}`;
+
+  const badgeFact = document.getElementById('memory-fact-count');
+  if (badgeFact) badgeFact.textContent = `${factCount} ${factCount === 1 ? 'fact' : 'facts'}`;
+
+  const statDocs = document.getElementById('stat-total-docs');
+  if (statDocs) statDocs.textContent = docCount;
+
+  const statFacts = document.getElementById('stat-total-facts');
+  if (statFacts) statFacts.textContent = factCount;
+
+  const totalChars = state.memoryDocs.reduce((acc, d) => acc + (d.char_count || 0), 0);
+  const statChars = document.getElementById('stat-total-chars');
+  if (statChars) statChars.textContent = totalChars.toLocaleString();
+}
+
 function addMemory(text) {
   const input = document.getElementById('memory-input');
   const val = text || input.value.trim();
   if (!val) return;
   state.memories.push(val);
   if (!text) input.value = '';
-  saveMemories(); renderMemories();
+  saveMemories();
+  renderMemories();
+  flashAction('✓ Added custom memory');
 }
 
-function removeMemory(i) { state.memories.splice(i,1); saveMemories(); renderMemories(); }
-function clearMemory() { state.memories=[]; saveMemories(); renderMemories(); }
+function quickAddFact(text) {
+  if (!state.memories.includes(text)) {
+    addMemory(text);
+  } else {
+    flashAction('Fact already in memory');
+  }
+}
+
+function copyFact(text) {
+  navigator.clipboard?.writeText(text).then(() => {
+    flashAction('✓ Copied fact to clipboard');
+  });
+}
+
+function removeMemory(i) {
+  state.memories.splice(i, 1);
+  saveMemories();
+  renderMemories();
+  flashAction('✓ Removed memory');
+}
+
+function clearMemory() {
+  state.memories = [];
+  saveMemories();
+  renderMemories();
+}
 
 function renderMemories() {
+  updateMemoryStats();
   const list = document.getElementById('memory-list');
+  if (!list) return;
+
   if (!state.memories.length) {
-    list.innerHTML = `<div class="memory-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg><p>No memory entries yet.<br>Memories are created from your conversations.</p></div>`;
+    list.innerHTML = `
+      <div class="memory-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40">
+          <ellipse cx="12" cy="5" rx="9" ry="3"/>
+          <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+        </svg>
+        <p>No personal memories yet.<br>Memories are auto-learned from conversations or added manually above.</p>
+      </div>`;
     return;
   }
-  list.innerHTML = state.memories.map((m,i) => `
-    <div class="memory-entry">
+
+  let filteredMemories = state.memories;
+  if (memorySearchQuery) {
+    filteredMemories = state.memories.filter(m => m.toLowerCase().includes(memorySearchQuery));
+  }
+
+  if (!filteredMemories.length) {
+    list.innerHTML = `
+      <div class="memory-empty">
+        <p>No facts match "<strong>${escHtml(memorySearchQuery)}</strong>"</p>
+      </div>`;
+    return;
+  }
+
+  list.innerHTML = filteredMemories.map((m, i) => `
+    <div class="memory-entry" onclick="copyFact('${escHtml(m)}')" title="Click to copy to clipboard">
       <div class="memory-entry-dot"></div>
       <div class="memory-entry-text">${escHtml(m)}</div>
-      <button class="memory-entry-del" onclick="removeMemory(${i})">✕</button>
+      <div class="memory-entry-actions">
+        <button class="memory-entry-btn" onclick="event.stopPropagation();copyFact('${escHtml(m)}')" title="Copy fact">📋</button>
+        <button class="memory-entry-btn del" onclick="event.stopPropagation();removeMemory(${i})" title="Delete fact">✕</button>
+      </div>
     </div>`).join('');
 }
 
 function autoExtractMemory(user, reply) {
   const nameMatch = user.match(/(?:my name is|i am|i'm|call me)\s+([A-Z][a-z]+)/i);
-  if (nameMatch) { const m=`User's name is ${nameMatch[1]}`; if (!state.memories.includes(m)) addMemory(m); }
+  if (nameMatch) {
+    const m = `User's name is ${nameMatch[1]}`;
+    if (!state.memories.includes(m)) addMemory(m);
+  }
   const jobMatch = user.match(/(?:i(?:'m| am) a(?:n)?|i work as a(?:n)?)\s+([a-z ]+?)(?:\.|,|$)/i);
-  if (jobMatch) { const m=`User works as: ${jobMatch[1].trim()}`; if (!state.memories.includes(m)) addMemory(m); }
+  if (jobMatch) {
+    const m = `User works as: ${jobMatch[1].trim()}`;
+    if (!state.memories.includes(m)) addMemory(m);
+  }
 }
 
-function saveMemories() { try { localStorage.setItem('aria_memories', JSON.stringify(state.memories)); } catch(e){} }
-function loadMemories() { try { const s=localStorage.getItem('aria_memories'); if(s){state.memories=JSON.parse(s);renderMemories();} } catch(e){} }
+function saveMemories() {
+  try {
+    localStorage.setItem('aria_memories', JSON.stringify(state.memories));
+  } catch(e) {}
+}
+
+function loadMemories() {
+  try {
+    const s = localStorage.getItem('aria_memories');
+    if (s) {
+      state.memories = JSON.parse(s);
+      renderMemories();
+    }
+  } catch(e) {}
+  loadMemoryDocs();
+}
+
+// ─── DOCUMENT KNOWLEDGE BASE (Memory Docs) ────────────
+function formatBytes(bytes) {
+  if (!bytes || isNaN(bytes)) return '0 B';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+async function loadMemoryDocs() {
+  try {
+    const res = await fetch(MEMORY_DOCS_URL);
+    if (!res.ok) return;
+    const data = await res.json();
+    state.memoryDocs = data.documents || [];
+    renderMemoryDocs();
+  } catch(e) {
+    console.warn('Could not load memory documents:', e);
+  }
+}
+
+function renderMemoryDocs() {
+  updateMemoryStats();
+  const list = document.getElementById('memory-docs-list');
+  if (!list) return;
+
+  if (!state.memoryDocs.length) {
+    list.innerHTML = `
+      <div class="memory-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        <p>No documents uploaded to memory yet.<br>Drop reference files above so the LLM can use their context in all chats.</p>
+      </div>`;
+    return;
+  }
+
+  let filteredDocs = state.memoryDocs;
+  if (memorySearchQuery) {
+    filteredDocs = state.memoryDocs.filter(d =>
+      d.filename.toLowerCase().includes(memorySearchQuery) ||
+      (d.summary && d.summary.toLowerCase().includes(memorySearchQuery))
+    );
+  }
+
+  if (!filteredDocs.length) {
+    list.innerHTML = `
+      <div class="memory-empty">
+        <p>No documents match "<strong>${escHtml(memorySearchQuery)}</strong>"</p>
+      </div>`;
+    return;
+  }
+
+  list.innerHTML = filteredDocs.map(doc => {
+    const rawExt = (doc.filename.split('.').pop() || 'doc').toLowerCase();
+    const badgeExt = rawExt.toUpperCase();
+    let badgeClass = 'badge-default';
+    if (rawExt === 'pdf') badgeClass = 'badge-pdf';
+    else if (['docx', 'doc'].includes(rawExt)) badgeClass = 'badge-docx';
+    else if (['txt', 'md', 'markdown'].includes(rawExt)) badgeClass = 'badge-txt';
+    else if (['csv', 'xlsx', 'xls'].includes(rawExt)) badgeClass = 'badge-csv';
+
+    const sizeStr = doc.size_bytes ? formatBytes(doc.size_bytes) : `${doc.char_count.toLocaleString()} chars`;
+    return `
+      <div class="memory-doc-card">
+        <div class="memory-doc-badge ${badgeClass}">${escHtml(badgeExt)}</div>
+        <div class="memory-doc-info">
+          <div class="memory-doc-title" title="${escHtml(doc.filename)}">${escHtml(doc.filename)}</div>
+          <div class="memory-doc-meta">
+            <span>${doc.char_count.toLocaleString()} chars</span>
+            <span>·</span>
+            <span>${sizeStr}</span>
+            <span>·</span>
+            <span>${escHtml(doc.uploaded_at || '')}</span>
+          </div>
+        </div>
+        <div class="memory-doc-actions">
+          <button class="memory-doc-btn" onclick="previewMemoryDoc('${doc.doc_id}')" title="Preview document content">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            Preview
+          </button>
+          <button class="memory-doc-btn chat-btn" onclick="askAboutDoc('${escHtml(doc.filename)}')" title="Ask question about this document in chat">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+            Ask in Chat
+          </button>
+          <button class="memory-doc-btn" onclick="copyDocSnippet('${doc.doc_id}')" title="Copy document summary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            Copy
+          </button>
+          <button class="memory-doc-btn del" onclick="deleteMemoryDoc('${doc.doc_id}')" title="Delete from memory">✕</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function askAboutDoc(filename) {
+  switchTab('chat', document.querySelector('[data-tab="chat"]'));
+  const input = document.getElementById('user-input');
+  if (input) {
+    input.value = `Based on document "${filename}", `;
+    input.focus();
+    autoResize(input);
+  }
+  flashAction(`💬 Switched to Chat for ${filename}`);
+}
+
+function copyDocSnippet(docId) {
+  const doc = state.memoryDocs.find(d => d.doc_id === docId);
+  if (doc) {
+    const textToCopy = doc.summary || doc.filename;
+    navigator.clipboard?.writeText(textToCopy).then(() => {
+      flashAction(`✓ Copied snippet of ${doc.filename}`);
+    });
+  }
+}
+
+async function uploadMemoryDoc(file) {
+  const statusEl = document.getElementById('memory-upload-status');
+  const dropArea = document.getElementById('memory-drop-area');
+
+  if (statusEl) {
+    statusEl.innerHTML = `<div class="doc-uploading"><div class="doc-spinner"></div><span>Adding <strong>${escHtml(file.name)}</strong> to memory…</span></div>`;
+  }
+  if (dropArea) dropArea.classList.add('uploading');
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch(MEMORY_UPLOAD_URL, { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) {
+      if (statusEl) statusEl.innerHTML = `<div class="doc-error">⚠️ ${escHtml(data.error || 'Upload failed')}</div>`;
+      if (dropArea) dropArea.classList.remove('uploading');
+      return;
+    }
+
+    if (statusEl) statusEl.innerHTML = '';
+    if (dropArea) dropArea.classList.remove('uploading');
+    flashAction(`✓ Stored in Memory: ${file.name}`);
+    await loadMemoryDocs();
+  } catch(e) {
+    if (statusEl) statusEl.innerHTML = `<div class="doc-error">⚠️ ${escHtml(e.message)}</div>`;
+    if (dropArea) dropArea.classList.remove('uploading');
+  }
+}
+
+function handleMemoryFileSelect(event) {
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+  for (const file of files) {
+    uploadMemoryDoc(file);
+  }
+  event.target.value = '';
+}
+
+function memoryDocDragOver(e) {
+  e.preventDefault();
+  document.getElementById('memory-drop-area')?.classList.add('dragover');
+}
+
+function memoryDocDragLeave(e) {
+  document.getElementById('memory-drop-area')?.classList.remove('dragover');
+}
+
+function memoryDocDrop(e) {
+  e.preventDefault();
+  document.getElementById('memory-drop-area')?.classList.remove('dragover');
+  const files = Array.from(e.dataTransfer.files || []);
+  for (const file of files) {
+    uploadMemoryDoc(file);
+  }
+}
+
+async function deleteMemoryDoc(docId) {
+  if (!confirm('Remove this document from memory? ARIA will no longer reference it in chats.')) return;
+  try {
+    const res = await fetch(`${MEMORY_DOCS_URL}/${docId}`, { method: 'DELETE' });
+    if (res.ok) {
+      flashAction('✓ Document removed from memory');
+      await loadMemoryDocs();
+    }
+  } catch(e) {
+    flashAction(`⚠ Error: ${e.message}`);
+  }
+}
+
+async function previewMemoryDoc(docId) {
+  const modal = document.getElementById('doc-preview-modal');
+  const badge = document.getElementById('preview-modal-badge');
+  const title = document.getElementById('preview-modal-title');
+  const meta = document.getElementById('preview-modal-meta');
+  const content = document.getElementById('preview-modal-content');
+
+  if (badge) badge.textContent = 'DOC';
+  if (title) title.textContent = 'Loading…';
+  if (meta) meta.textContent = '';
+  if (content) content.textContent = 'Fetching document content…';
+  if (modal) modal.style.display = 'flex';
+
+  try {
+    const res = await fetch(`${MEMORY_DOCS_URL}/${docId}`);
+    if (!res.ok) throw new Error('Document not found');
+    const data = await res.json();
+    const doc = data.document;
+
+    const ext = (doc.filename.split('.').pop() || 'txt').toUpperCase();
+    if (badge) badge.textContent = ext;
+    if (title) title.textContent = doc.filename;
+    if (meta) meta.textContent = `${doc.char_count.toLocaleString()} characters · ${formatBytes(doc.size_bytes || 0)} · Uploaded ${doc.uploaded_at}`;
+    if (content) content.textContent = doc.text || doc.summary || 'No text content available.';
+  } catch(e) {
+    if (content) content.textContent = `Error: ${e.message}`;
+  }
+}
+
+function closeDocPreview() {
+  const modal = document.getElementById('doc-preview-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function promoteCurrentDocToMemory() {
+  if (!state.doc.id) {
+    flashAction('No document currently loaded in Docs tab');
+    return;
+  }
+  const btn = document.getElementById('doc-memory-pin-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+  }
+  try {
+    const res = await fetch(`${MEMORY_PROMOTE_URL}/${state.doc.id}`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save to memory');
+
+    flashAction(`✓ Saved to Memory: ${state.doc.filename}`);
+    await loadMemoryDocs();
+    if (btn) {
+      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg> Saved in Memory`;
+      btn.style.background = 'var(--accent)';
+      btn.style.color = '#0d0f14';
+    }
+  } catch(e) {
+    flashAction(`⚠ ${e.message}`);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Save to Memory';
+    }
+  }
+}
+
+async function confirmClearAllMemory() {
+  const choice = confirm('Clear all memory documents and personal facts?\nClick OK to clear everything, or Cancel to abort.');
+  if (!choice) return;
+  state.memories = [];
+  saveMemories();
+  renderMemories();
+  try {
+    await fetch(MEMORY_CLEAR_URL, { method: 'POST' });
+    await loadMemoryDocs();
+    flashAction('✓ Memory and documents cleared');
+  } catch(e) {
+    console.error(e);
+  }
+}
 
 // ─── SETTINGS ─────────────────────────────────────────
 function saveSettings() {
@@ -1122,10 +1551,14 @@ async function uploadDocument(file) {
     }
 
     // Store doc info
-    state.doc.id        = data.doc_id;
-    state.doc.filename  = data.filename;
-    state.doc.charCount = data.char_count;
-    state.doc.history   = [];
+    state.doc.id            = data.doc_id;
+    state.doc.filename      = data.filename;
+    state.doc.charCount     = data.char_count;
+    state.doc.history       = [];
+    state.doc.downloadToken = null;
+    // Hide download btn in case it was visible from a prior session
+    const dlBtn = document.getElementById('doc-download-btn');
+    if (dlBtn) dlBtn.style.display = 'none';
 
     // Switch to doc chat UI
     document.getElementById('doc-upload-zone').style.display    = 'none';
@@ -1145,7 +1578,7 @@ async function uploadDocument(file) {
   }
 }
 
-/** Send a message to /api/doc-query */
+/** Send a message to /api/doc-query OR /api/doc-edit depending on intent */
 async function sendDocMessage() {
   if (!state.doc.id || state.doc.isLoading) return;
   const input = document.getElementById('doc-input');
@@ -1162,40 +1595,86 @@ async function sendDocMessage() {
   input.value = '';
   autoResize(input);
 
+  // Detect whether this is an edit instruction or a Q&A query
+  const looksLikeEdit = detectEditIntent(question);
+
   // Show typing
   const typingId = showDocTyping();
   state.doc.isLoading = true;
   document.getElementById('doc-send-btn').disabled = true;
 
-  try {
-    const res = await fetch(DOC_QUERY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        doc_id:   state.doc.id,
-        question: question,
-        model:    state.settings.model,
-        history:  state.doc.history.slice(-10), // last 10 turns for context
-      }),
-    });
-    const data = await res.json();
-    removeDocTyping(typingId);
+  if (looksLikeEdit) {
+    // ─ EDIT PATH ──────────────────────────────────────────────
+    try {
+      const res = await fetch(DOC_EDIT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          doc_id:      state.doc.id,
+          instruction: question,
+          model:       state.settings.model,
+        }),
+      });
+      const data = await res.json();
+      removeDocTyping(typingId);
 
-    if (!res.ok) {
-      appendDocMessage('assistant', `⚠ ${data.error || 'Unknown error.'}`);
-    } else {
-      const reply = data.content || '';
-      appendDocMessage('assistant', reply);
-      state.doc.history.push({ role: 'assistant', content: reply });
-      speakText(stripMarkdown(reply));
+      if (!res.ok) {
+        appendDocMessage('assistant', `⚠ Edit failed: ${data.error || 'Unknown error.'}`);
+      } else {
+        // Store token for download
+        state.doc.downloadToken = data.download_token;
+        state.doc.charCount     = data.char_count;
+        // Update char count in banner
+        const charsEl = document.getElementById('doc-info-chars');
+        if (charsEl) charsEl.textContent = `${(data.char_count).toLocaleString()} chars (edited)`;
+        // Show download button in banner
+        const dlBtn = document.getElementById('doc-download-btn');
+        if (dlBtn) dlBtn.style.display = 'inline-flex';
+        // Render the edit result card in chat
+        renderDocEditResult(data);
+        state.doc.history.push({ role: 'assistant', content: '✅ ' + data.summary });
+      }
+    } catch (err) {
+      removeDocTyping(typingId);
+      appendDocMessage('assistant', `⚠ Network error: ${err.message}`);
+    } finally {
+      state.doc.isLoading = false;
+      document.getElementById('doc-send-btn').disabled = false;
+      document.getElementById('doc-input').focus();
     }
-  } catch (err) {
-    removeDocTyping(typingId);
-    appendDocMessage('assistant', `⚠ Network error: ${err.message}`);
-  } finally {
-    state.doc.isLoading = false;
-    document.getElementById('doc-send-btn').disabled = false;
-    document.getElementById('doc-input').focus();
+
+  } else {
+    // ─ QUERY PATH ────────────────────────────────────────────
+    try {
+      const res = await fetch(DOC_QUERY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          doc_id:   state.doc.id,
+          question: question,
+          model:    state.settings.model,
+          history:  state.doc.history.slice(-10),
+        }),
+      });
+      const data = await res.json();
+      removeDocTyping(typingId);
+
+      if (!res.ok) {
+        appendDocMessage('assistant', `⚠ ${data.error || 'Unknown error.'}`);
+      } else {
+        const reply = data.content || '';
+        appendDocMessage('assistant', reply);
+        state.doc.history.push({ role: 'assistant', content: reply });
+        speakText(stripMarkdown(reply));
+      }
+    } catch (err) {
+      removeDocTyping(typingId);
+      appendDocMessage('assistant', `⚠ Network error: ${err.message}`);
+    } finally {
+      state.doc.isLoading = false;
+      document.getElementById('doc-send-btn').disabled = false;
+      document.getElementById('doc-input').focus();
+    }
   }
 }
 
@@ -1207,6 +1686,61 @@ function sendDocQuick(text) {
 
 function handleDocKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendDocMessage(); }
+}
+
+// ─── EDIT INTENT DETECTION ──────────────────────────────
+const EDIT_KEYWORDS = [
+  'remove','delete','drop','erase','strip','exclude','clear',
+  'replace','rename','change','update','modify','edit','correct',
+  'fix','set','overwrite','rewrite',
+  'add','insert','append','include',
+  'sort','reorder','filter','hide','move',
+];
+function detectEditIntent(text) {
+  const lower = text.toLowerCase();
+  return EDIT_KEYWORDS.some(kw => new RegExp('\\b' + kw + '\\b').test(lower));
+}
+
+// ─── DOWNLOAD EDITED DOC ─────────────────────────────
+function downloadEditedDoc() {
+  if (!state.doc.downloadToken) return;
+  // Navigate to the download URL — browser will trigger file download
+  window.location.href = `${DOC_DOWNLOAD_URL}/${state.doc.downloadToken}`;
+}
+
+// ─── RENDER EDIT RESULT CARD ─────────────────────────
+function renderDocEditResult(data) {
+  const win = document.getElementById('doc-chat-window');
+  const div = document.createElement('div');
+  div.className = 'message assistant';
+
+  const changesList = (data.changes || []).map(c =>
+    `<li>${escHtml(c)}</li>`
+  ).join('');
+
+  div.innerHTML = `
+    <div class="msg-avatar">AI</div>
+    <div class="msg-body">
+      <div class="msg-label">${escHtml(state.settings.assistantName)} <span class="routing-badge edit-badge">✎ Edit Applied</span></div>
+      <div class="doc-edit-card">
+        <div class="doc-edit-summary">✅ ${escHtml(data.summary)}</div>
+        ${changesList ? `<ul class="doc-edit-changes">${changesList}</ul>` : ''}
+        <div class="doc-edit-meta">
+          <span>📄 ${escHtml(data.filename)}</span>
+          <span>${(data.char_count || 0).toLocaleString()} chars after edit</span>
+        </div>
+        <button class="doc-edit-download-btn" onclick="downloadEditedDoc()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Download Edited File
+        </button>
+      </div>
+    </div>`;
+  win.appendChild(div);
+  win.scrollTop = win.scrollHeight;
 }
 
 /** Append a message bubble to the doc-chat-window */
@@ -1244,8 +1778,9 @@ document.addEventListener('keydown', e => {
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
   if (e.code === 'Space' && !e.ctrlKey && !e.altKey && !e.metaKey) {
     e.preventDefault();
-    // Only toggle mic if not on the docs tab
-    if (!document.getElementById('tab-docs')?.classList.contains('active')) {
+    // Only toggle mic if not on the docs or agent tab
+    const active = document.querySelector('.tab-panel.active');
+    if (active && !['tab-docs','tab-agent'].includes(active.id)) {
       toggleListening();
     }
   }
@@ -1257,12 +1792,243 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// ══════════════════════════════════════════════════════════
+// AGENT MODE — v3.0
+// ══════════════════════════════════════════════════════════
+
+// ─── Update uploaded-file hint in Agent tab ───────────
+function updateAgentFileHint() {
+  const hint = document.getElementById('agent-file-hint');
+  if (!hint) return;
+  if (state.doc && state.doc.id && state.doc.filename) {
+    hint.textContent = `📄 Using: ${state.doc.filename}`;
+    hint.style.color = 'var(--accent)';
+  } else {
+    hint.textContent = 'No files uploaded. Upload via Docs tab first.';
+    hint.style.color = 'var(--text-dim)';
+  }
+}
+
+// ─── Set agent status badge ───────────────────────────
+function setAgentStatus(text, cls) {
+  const badge = document.getElementById('agent-status-badge');
+  if (!badge) return;
+  badge.textContent = text;
+  badge.className = 'agent-status-badge' + (cls ? ' ' + cls : '');
+}
+
+// ─── Render plan steps list ───────────────────────────
+function renderAgentPlan(steps) {
+  const list = document.getElementById('agent-plan-list');
+  if (!list) return;
+  list.innerHTML = '';
+  steps.forEach((step, i) => {
+    const li = document.createElement('li');
+    li.className = 'agent-plan-item';
+    li.id = `plan-item-${i}`;
+    // Detect tool call
+    const toolMatch = step.match(/^([a-z_][a-z0-9_]*)\s*\(/);
+    if (toolMatch) {
+      li.innerHTML = `<span class="agent-tool-badge">${toolMatch[1]}</span> ${escHtml(step.replace(toolMatch[0], '').replace(/\)\s*$/, ''))}`;
+    } else {
+      li.textContent = step;
+    }
+    list.appendChild(li);
+  });
+}
+
+// ─── Render step cards from result ───────────────────
+function renderAgentSteps(steps) {
+  const container = document.getElementById('agent-steps-list');
+  if (!container) return;
+  container.innerHTML = '';
+  if (!steps || !steps.length) return;
+
+  steps.forEach(step => {
+    const card = document.createElement('div');
+    card.className = 'agent-step-card';
+
+    // Status icon
+    const hasError  = !!step.error;
+    const verified  = step.verified === true;
+    const statusIcon = hasError ? '✗' : verified ? '✓' : '○';
+    const statusCls  = hasError ? 'step-fail' : verified ? 'step-pass' : 'step-pending';
+
+    // Model/tool badge
+    const modelLabel = step.model || step.task_type || '';
+    const isTool = modelLabel.startsWith('tool:');
+    const badgeText = isTool ? modelLabel.replace('tool:', '') : modelLabel;
+    const badgeCls  = isTool ? 'agent-tool-badge' : 'agent-model-badge';
+
+    // Tool calls
+    let toolCallsHtml = '';
+    if (step.tool_calls && step.tool_calls.length) {
+      toolCallsHtml = step.tool_calls.map(tc => {
+        const tcStatus = tc.success ? '✓' : '✗';
+        const tcCls    = tc.success ? 'tc-ok' : 'tc-err';
+        return `<div class="agent-tool-call ${tcCls}"><span class="tc-icon">${tcStatus}</span><code>${escHtml(tc.tool)}</code><span class="tc-latency">${tc.latency}s</span></div>`;
+      }).join('');
+    }
+
+    // Output preview
+    const outputText = step.output ? escHtml(step.output.slice(0, 300)) + (step.output.length > 300 ? '…' : '') : (step.error ? `<span style="color:var(--error)">${escHtml(step.error)}</span>` : '');
+
+    card.innerHTML = `
+      <div class="agent-step-header">
+        <span class="agent-step-num ${statusCls}">${statusIcon} ${step.step}</span>
+        <span class="agent-step-instruction">${escHtml(step.instruction)}</span>
+        <span class="${badgeCls}">${escHtml(badgeText)}</span>
+      </div>
+      ${toolCallsHtml}
+      ${outputText ? `<div class="agent-step-output">${outputText}</div>` : ''}
+    `;
+    container.appendChild(card);
+  });
+}
+
+// ─── Render generated file download cards ─────────────
+function renderGeneratedFiles(files) {
+  if (!files || !files.length) return;
+  const panel = document.getElementById('agent-files-panel');
+  const cards = document.getElementById('agent-file-cards');
+  if (!panel || !cards) return;
+
+  panel.style.display = 'block';
+  cards.innerHTML = '';
+
+  const icons = { docx: '📄', pptx: '📊', xlsx: '📈', default: '📁' };
+  const colors = { docx: '#2e75b6', pptx: '#c55a11', xlsx: '#375623' };
+
+  files.forEach(f => {
+    const ext = (f.name.split('.').pop() || '').toLowerCase();
+    const icon  = icons[ext]  || icons.default;
+    const color = colors[ext] || '#555';
+    const sizeKb = Math.round((f.size || 0) / 1024);
+    const dlUrl  = f.download_token ? `${AGENT_DL_URL}/${f.download_token}` : '#';
+
+    const card = document.createElement('a');
+    card.href      = dlUrl;
+    card.download  = f.name;
+    card.className = 'agent-file-card';
+    card.style.setProperty('--file-color', color);
+    card.innerHTML = `
+      <div class="afc-icon">${icon}</div>
+      <div class="afc-meta">
+        <div class="afc-name">${escHtml(f.name)}</div>
+        <div class="afc-size">${sizeKb > 0 ? sizeKb + ' KB' : 'Ready'}</div>
+      </div>
+      <svg class="afc-dl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+    `;
+    cards.appendChild(card);
+  });
+}
+
+// ─── Render synthesis ─────────────────────────────────
+function renderAgentSynthesis(text) {
+  if (!text) return;
+  const panel   = document.getElementById('agent-synthesis-panel');
+  const content = document.getElementById('agent-synthesis-content');
+  if (!panel || !content) return;
+  panel.style.display = 'block';
+  content.innerHTML = formatMessage(text);
+}
+
+// ─── Main: Run Agent ──────────────────────────────────
+async function runAgent() {
+  const goalEl = document.getElementById('agent-goal-input');
+  const goal   = goalEl ? goalEl.value.trim() : '';
+  if (!goal) {
+    goalEl && goalEl.focus();
+    return;
+  }
+  if (state.agentRunning) return;
+  state.agentRunning = true;
+
+  // UI: show execution area, clear previous
+  const execEl = document.getElementById('agent-execution');
+  if (execEl) execEl.style.display = 'block';
+  document.getElementById('agent-plan-list').innerHTML = '';
+  document.getElementById('agent-steps-list').innerHTML = '';
+  document.getElementById('agent-files-panel').style.display  = 'none';
+  document.getElementById('agent-synthesis-panel').style.display = 'none';
+
+  const runBtn = document.getElementById('agent-run-btn');
+  if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Running…'; }
+
+  setAgentStatus('Planning…', 'status-planning');
+
+  // Build payload — include current doc if available
+  const payload = { goal };
+  if (state.doc && state.doc.id) payload.files = [state.doc.id];
+
+  try {
+    const resp = await fetch(AGENT_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+
+    const data = await resp.json();
+
+    // Render plan
+    if (data.plan && data.plan.length) {
+      renderAgentPlan(data.plan);
+    }
+
+    // Render steps
+    if (data.steps && data.steps.length) {
+      renderAgentSteps(data.steps);
+    }
+
+    // Render generated files
+    if (data.generated_files && data.generated_files.length) {
+      renderGeneratedFiles(data.generated_files);
+    }
+
+    // Render synthesis
+    if (data.synthesis) {
+      renderAgentSynthesis(data.synthesis);
+    }
+
+    setAgentStatus(data.status === 'done' ? 'Done ✓' : data.status, data.status === 'done' ? 'status-done' : 'status-fail');
+
+  } catch (err) {
+    setAgentStatus('Error', 'status-fail');
+    const container = document.getElementById('agent-steps-list');
+    if (container) {
+      container.innerHTML = `<div class="agent-error-msg">⚠ ${escHtml(err.message)}</div>`;
+    }
+  } finally {
+    state.agentRunning = false;
+    if (runBtn) { runBtn.disabled = false; runBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run Agent'; }
+  }
+}
+
+// ─── Helper: escape HTML ──────────────────────────────
+function escHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 // ─── INIT ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
   loadMemories();
   loadModels();
   loadVoices();
+  updateAgentFileHint();
   document.getElementById('user-input').focus();
   // Greeting is deferred to unmuteTTS() — browsers block autoplay without user gesture
 });

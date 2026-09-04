@@ -4,9 +4,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ARIA — AI Voice Desktop Assistant</title>
+  <title>ARIA — Agentic AI Desktop Assistant</title>
   <meta name="description"
-    content="ARIA — AI Voice Desktop Assistant. Features voice commands, chat, tools, memory, calculator and notepad.">
+    content="ARIA v3.0 — Agentic AI Desktop Assistant. Features autonomous multi-step planning, tool use, document generation, OCR, and voice commands.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link
     href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap"
@@ -44,7 +44,7 @@
     <div class="listen-wave">
       <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
     </div>
-    <button class="listen-cancel" onclick="stopListening()">✕ Cancel</button>
+    <button class="listen-cancel" onclick="stopListening()">✕ STOP</button>
   </div>
 
   <!-- ══ ACTION FLASH ══ -->
@@ -167,6 +167,14 @@
               d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
           </svg><span>Settings</span>
         </button>
+        <!-- Agent Mode nav -->
+        <button class="nav-btn nav-agent" data-tab="agent" onclick="switchTab('agent',this)" id="nav-agent-btn"
+          title="Agent Mode — autonomous multi-step tasks">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <polygon
+              points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg><span>Agent</span>
+        </button>
       </nav>
       <div class="sidebar-status">
         <div class="status-dot" id="status-dot"></div>
@@ -237,10 +245,20 @@
           <div class="input-row">
             <textarea id="user-input" placeholder="Type a message or press Space / Speak button to use voice…" rows="1"
               onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
-            <button class="deep-think-btn" id="deep-think-btn" onclick="toggleDeepThink()" title="Deep Think OFF — click to enable multi-step orchestration">
+            <button class="deep-think-btn" id="deep-think-btn" onclick="toggleDeepThink()"
+              title="Deep Think OFF — click to enable multi-step orchestration">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-                <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2h-4a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
-                <line x1="9" y1="21" x2="15" y2="21"/>
+                <path
+                  d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2h-4a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z" />
+                <line x1="9" y1="21" x2="15" y2="21" />
+              </svg>
+            </button>
+            <!-- Agent Mode quick-launch from chat -->
+            <button class="agent-mode-btn" id="agent-mode-btn"
+              onclick="switchTab('agent', document.getElementById('nav-agent-btn'))" title="Switch to Agent Mode">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <polygon
+                  points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
               </svg>
             </button>
             <button class="send-btn" id="send-btn" onclick="sendMessage()">
@@ -477,10 +495,12 @@
               <span class="doc-badge">TXT</span>
               <span class="doc-badge">DOCX</span>
               <span class="doc-badge">MD</span>
+              <span class="doc-badge">CSV</span>
+              <span class="doc-badge doc-badge-edit">XLSX ✎</span>
             </div>
           </div>
-          <input type="file" id="doc-file-input" accept=".pdf,.txt,.docx,.md,.markdown,.rst,.csv" style="display:none"
-            onchange="handleDocFileSelect(event)" />
+          <input type="file" id="doc-file-input" accept=".pdf,.txt,.docx,.md,.markdown,.rst,.csv,.xlsx,.xls"
+            style="display:none" onchange="handleDocFileSelect(event)" />
           <div class="doc-upload-status" id="doc-upload-status"></div>
         </div>
 
@@ -498,6 +518,22 @@
               <span class="doc-info-name" id="doc-info-name">document.pdf</span>
               <span class="doc-info-chars" id="doc-info-chars"></span>
             </div>
+            <button class="doc-download-btn" id="doc-download-btn" onclick="downloadEditedDoc()" style="display:none"
+              title="Download the edited file">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Download Edited
+            </button>
+            <button class="doc-memory-pin-btn" id="doc-memory-pin-btn" onclick="promoteCurrentDocToMemory()"
+              title="Save this document to permanent memory so all chats can access it">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" />
+              </svg>
+              Save to Memory
+            </button>
             <button class="doc-remove-btn" onclick="clearDocSession()" title="Remove document">✕ Remove</button>
           </div>
           <!-- Doc messages -->
@@ -541,30 +577,158 @@
         </div>
       </section>
 
-      <!-- ══ MEMORY TAB ══ -->
+      <!-- ══ MEMORY & KNOWLEDGE BASE TAB ══ -->
       <section class="tab-panel" id="tab-memory">
         <div class="panel-header">
           <div>
-            <h1 class="panel-title">Memory</h1>
-            <p class="panel-sub">Context stored in this session</p>
-          </div><button class="icon-btn" onclick="clearMemory()"><svg viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" stroke-width="1.8">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
-            </svg></button>
-        </div>
-        <div class="memory-list" id="memory-list">
-          <div class="memory-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
-              width="40">
-              <ellipse cx="12" cy="5" rx="9" ry="3" />
-              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-            </svg>
-            <p>No memory entries yet.<br>Memories are created from your conversations.</p>
+            <h1 class="panel-title">Memory &amp; Knowledge Base</h1>
+            <p class="panel-sub">Context and reference knowledge ARIA remembers across all chats</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="memory-quick-clear-btn" onclick="confirmClearAllMemory()" title="Clear memory and documents">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+                <path d="M10 11v6M14 11v6" />
+              </svg>
+              <span>Clear All</span>
+            </button>
           </div>
         </div>
-        <div class="memory-add"><input type="text" id="memory-input" placeholder="Add a custom memory..." /><button
-            class="run-btn" onclick="addMemory()">Add</button></div>
+
+        <!-- Scrollable Memory Container -->
+        <div class="memory-scroll-container" id="memory-scroll-container">
+
+          <!-- Knowledge Stats Overview Bar -->
+          <div class="memory-stats-bar">
+            <div class="mem-stat-item">
+              <span class="mem-stat-val" id="stat-total-docs">0</span>
+              <span class="mem-stat-lbl">Documents</span>
+            </div>
+            <div class="mem-stat-divider"></div>
+            <div class="mem-stat-item">
+              <span class="mem-stat-val" id="stat-total-chars">0</span>
+              <span class="mem-stat-lbl">Chars Indexed</span>
+            </div>
+            <div class="mem-stat-divider"></div>
+            <div class="mem-stat-item">
+              <span class="mem-stat-val" id="stat-total-facts">0</span>
+              <span class="mem-stat-lbl">Personal Facts</span>
+            </div>
+            <div class="mem-stat-divider"></div>
+            <div class="mem-stat-status" title="Ollama retrieves relevant context on every chat message">
+              <span class="status-pulse-dot"></span>
+              <span>Universal RAG Active</span>
+            </div>
+          </div>
+
+          <!-- Universal Document Context Banner -->
+          <div class="memory-context-banner">
+            <div class="memory-banner-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+              </svg>
+            </div>
+            <div class="memory-banner-text">
+              <h4>Persistent Context Active</h4>
+              <p>Uploaded documents and saved facts are stored on disk. ARIA automatically searches and injects relevant
+                excerpts into the prompt during all chats, voice commands, and Deep Think tasks.</p>
+            </div>
+          </div>
+
+          <!-- Search & Filter Controls -->
+          <div class="memory-toolbar">
+            <div class="memory-search-box">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              <input type="text" id="memory-search-input"
+                placeholder="Search memory documents &amp; facts in real time…" oninput="filterMemories(this.value)" />
+              <button id="memory-search-clear" class="memory-search-clear" onclick="clearMemorySearch()"
+                style="display:none">✕</button>
+            </div>
+            <div class="memory-filter-pills">
+              <button class="mem-pill-btn active" data-filter="all" onclick="setMemoryFilter('all', this)">All</button>
+              <button class="mem-pill-btn" data-filter="docs" onclick="setMemoryFilter('docs', this)">Documents (<span
+                  id="pill-doc-count">0</span>)</button>
+              <button class="mem-pill-btn" data-filter="facts" onclick="setMemoryFilter('facts', this)">Facts (<span
+                  id="pill-fact-count">0</span>)</button>
+            </div>
+          </div>
+
+          <!-- Section 1: Document Knowledge Base -->
+          <div class="memory-section" id="memory-docs-section">
+            <div class="memory-section-header">
+              <div class="memory-section-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+                <span>Uploaded Documents</span>
+              </div>
+              <span class="memory-badge-count" id="memory-doc-count">0 documents</span>
+            </div>
+
+            <!-- Upload Drop Zone in Memory -->
+            <div class="memory-upload-zone" id="memory-upload-zone">
+              <div class="memory-drop-area" id="memory-drop-area"
+                onclick="document.getElementById('memory-file-input').click()" ondragover="memoryDocDragOver(event)"
+                ondragleave="memoryDocDragLeave(event)" ondrop="memoryDocDrop(event)">
+                <div class="memory-drop-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="34" height="34">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
+                </div>
+                <div class="memory-drop-title">Drop documents to add to Memory</div>
+                <div class="memory-drop-sub">or click to browse · Supports PDF, DOCX, TXT, MD, CSV</div>
+              </div>
+              <input type="file" id="memory-file-input" accept=".pdf,.txt,.docx,.md,.markdown,.rst,.csv" multiple
+                style="display:none" onchange="handleMemoryFileSelect(event)" />
+              <div class="memory-upload-status" id="memory-upload-status"></div>
+            </div>
+
+            <!-- List of Memory Documents -->
+            <div class="memory-docs-list" id="memory-docs-list"></div>
+          </div>
+
+          <!-- Section 2: Conversational & Custom Memories -->
+          <div class="memory-section" id="memory-facts-section">
+            <div class="memory-section-header">
+              <div class="memory-section-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <path
+                    d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
+                </svg>
+                <span>Personal Facts &amp; Preferences</span>
+              </div>
+              <span class="memory-badge-count" id="memory-fact-count">0 facts</span>
+            </div>
+
+            <div class="memory-add-card">
+              <div class="memory-add-input-row">
+                <input type="text" id="memory-input"
+                  placeholder="Add a custom fact (e.g. 'Prefers concise bullet points')..."
+                  onkeydown="if(event.key==='Enter')addMemory()" />
+                <button class="run-btn" onclick="addMemory()">Add Fact</button>
+              </div>
+              <div class="memory-quick-chips">
+                <span class="quick-chip-label">Suggestions:</span>
+                <button class="quick-chip" onclick="quickAddFact('Prefers concise code solutions')">+ Concise
+                  code</button>
+                <button class="quick-chip" onclick="quickAddFact('Format responses with markdown lists')">+ Markdown
+                  lists</button>
+                <button class="quick-chip" onclick="quickAddFact('Timezone is IST (+05:30)')">+ Timezone IST</button>
+                <button class="quick-chip" onclick="quickAddFact('Full-stack developer')">+ Developer</button>
+              </div>
+            </div>
+
+            <div class="memory-list" id="memory-list"></div>
+          </div>
+
+        </div> <!-- /memory-scroll-container -->
       </section>
 
       <!-- ══ SETTINGS TAB ══ -->
@@ -639,16 +803,124 @@
           <div class="settings-section">
             <h4>About</h4>
             <div class="about-block">
-              <p>ARIA Desktop Assistant v2.0 — Voice Edition</p>
+              <p>ARIA Desktop Assistant v3.0 — Agentic Edition</p>
               <p>Built with HTML · CSS · JavaScript + Python Flask</p>
               <p>AI Model · Voice: Web Speech API</p>
-              <p>Voice commands: 30+ actions supported · Free &amp; open-source AI</p>
+              <p>Full Agent Loop: Plan → Execute → Verify → Replan</p>
             </div>
           </div>
         </div>
       </section>
 
+      <!-- ══ AGENT MODE TAB ══ -->
+      <section class="tab-panel" id="tab-agent">
+        <div class="panel-header">
+          <div>
+            <h1 class="panel-title">Agent Mode</h1>
+            <p class="panel-sub">Autonomous multi-step task execution with tools</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span class="agent-status-badge" id="agent-status-badge">Ready</span>
+          </div>
+        </div>
+
+        <!-- Goal input area -->
+        <div class="agent-goal-section">
+          <div class="agent-goal-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16">
+              <polygon
+                points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+            <span>High-Level Goal</span>
+          </div>
+          <textarea id="agent-goal-input"
+            placeholder="e.g. Analyze the uploaded inspection report, compare with maintenance SOP, calculate required values, and prepare an approval note in Word."
+            rows="3"></textarea>
+          <div class="agent-goal-actions">
+            <div class="agent-file-hint" id="agent-file-hint">No files uploaded. Upload via Docs tab first.</div>
+            <button class="agent-run-btn" id="agent-run-btn" onclick="runAgent()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+              Run Agent
+            </button>
+          </div>
+        </div>
+
+        <!-- Live execution view -->
+        <div class="agent-execution" id="agent-execution" style="display:none">
+
+          <!-- Plan panel -->
+          <div class="agent-plan-panel">
+            <div class="agent-section-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
+                <line x1="8" y1="6" x2="21" y2="6" />
+                <line x1="8" y1="12" x2="21" y2="12" />
+                <line x1="8" y1="18" x2="21" y2="18" />
+                <line x1="3" y1="6" x2="3.01" y2="6" />
+                <line x1="3" y1="12" x2="3.01" y2="12" />
+                <line x1="3" y1="18" x2="3.01" y2="18" />
+              </svg>
+              Execution Plan
+            </div>
+            <ol class="agent-plan-list" id="agent-plan-list"></ol>
+          </div>
+
+          <!-- Step cards -->
+          <div class="agent-steps-panel">
+            <div class="agent-section-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+              </svg>
+              Live Execution
+            </div>
+            <div id="agent-steps-list"></div>
+          </div>
+
+          <!-- Generated files -->
+          <div class="agent-files-panel" id="agent-files-panel" style="display:none">
+            <div class="agent-section-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+              </svg>
+              Generated Files
+            </div>
+            <div class="agent-file-cards" id="agent-file-cards"></div>
+          </div>
+
+          <!-- Synthesis -->
+          <div class="agent-synthesis-panel" id="agent-synthesis-panel" style="display:none">
+            <div class="agent-section-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
+                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+              </svg>
+              ARIA Summary
+            </div>
+            <div class="agent-synthesis-content" id="agent-synthesis-content"></div>
+          </div>
+        </div>
+      </section>
+
     </main>
+  </div>
+
+  <!-- Memory Document Preview Modal -->
+  <div class="doc-preview-modal" id="doc-preview-modal" style="display:none"
+    onclick="if(event.target===this)closeDocPreview()">
+    <div class="doc-preview-dialog">
+      <div class="doc-preview-header">
+        <div class="doc-preview-title-wrap">
+          <span class="doc-preview-badge" id="preview-modal-badge">DOC</span>
+          <h3 id="preview-modal-title">Document Preview</h3>
+        </div>
+        <button class="modal-close-btn" onclick="closeDocPreview()" title="Close">✕</button>
+      </div>
+      <div class="doc-preview-meta" id="preview-modal-meta">Loading metadata…</div>
+      <div class="doc-preview-body" id="preview-modal-body">
+        <pre id="preview-modal-content">Loading document text…</pre>
+      </div>
+    </div>
   </div>
 
   <script src="webthreads.js"></script>

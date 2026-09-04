@@ -1,14 +1,17 @@
 """
-ARIA v2.0 — AI Voice Desktop Assistant · server.py
-Flask proxy server for Ollama (Local LLMs — no internet required)
-Multi-Model Architecture: Gateway + Router + Orchestrator + Sandbox
-────────────────────────────────────────────────────
+ARIA v3.0 — Agentic AI Desktop Assistant · server.py
+Flask backend for Ollama (Local LLMs — no internet required)
+Full Agentic Architecture:
+  Gateway → Router → AgentOrchestrator → ToolRegistry → Verify+Replan
+────────────────────────────────────────────────────────────────────────
 Setup:
-    pip install flask flask-cors ollama pypdf python-docx
+    pip install flask flask-cors ollama pypdf python-docx python-pptx openpyxl
+    pip install pytesseract Pillow pdf2image sympy
+    # Windows OCR: install Tesseract from https://github.com/UB-Mannheim/tesseract/wiki
 
 Prerequisite:
     1. Install Ollama: https://ollama.com/download
-    2. Pull models: ollama pull llama3.2 && ollama pull qwen3:4b
+    2. Pull models: ollama pull llama3.2 && ollama pull qwen3:4b && ollama pull llava
     3. Make sure the Ollama service is running (it auto-starts after install,
        or run `ollama serve` manually)
 
@@ -16,7 +19,7 @@ Run:
     python server.py
 
 Then open index.html in your browser (or serve via a local server).
-The frontend connects to http://localhost:5000/api/chat by default.
+The frontend connects to http://localhost:5000 by default.
 
 No API key, no .env, no internet needed — everything runs on-device.
 """
@@ -24,11 +27,13 @@ No API key, no .env, no internet needed — everything runs on-device.
 import os
 import sys
 import uuid
+import time
 import tempfile
 import automation
 import json
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+import io
 
 # Suppress HuggingFace symlinks warning on Windows (cosmetic only — caching still works)
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -48,8 +53,11 @@ except ImportError:
 # ─── Multi-Model Architecture Imports ─────────────────
 from gateway import ModelGateway, GatewayError, ModelNotFoundError
 from router import ModelRouter
-from orchestrator import Orchestrator
+from orchestrator import Orchestrator, AgentOrchestrator
 from sandbox import CodeSandbox
+from doc_editor import apply_edit, is_edit_intent
+from tool_registry import ToolRegistry
+from agent_state import AgentState
 
 # ─── App Setup ────────────────────────────────────────
 app = Flask(__name__)
@@ -63,11 +71,47 @@ router       = ModelRouter(default_model=DEFAULT_MODEL)
 sandbox      = CodeSandbox(timeout=5)
 orchestrator = Orchestrator(gateway=gateway, router=router, sandbox=sandbox)
 
-print("[ARIA] Multi-model architecture initialized:")
-print(f"  -> Gateway:      default={DEFAULT_MODEL}, keep_alive=5m")
-print(f"  -> Router:       heuristic mode, {len(router.get_routing_table())} task types")
-print(f"  -> Sandbox:      timeout=5s, Python only")
-print(f"  -> Orchestrator: max_steps={Orchestrator.MAX_STEPS}, max_retries={Orchestrator.MAX_RETRIES}")
+from memory_store import MemoryStore
+memory_store = MemoryStore()
+
+# ─── v3.0: ToolRegistry + AgentOrchestrator ───────────
+# doc_store and download_store are defined below; pass by reference so
+# the registry always sees the live dict contents.
+_doc_store:      dict[str, dict] = {}
+_download_store: dict[str, dict] = {}
+DOWNLOAD_TTL_SECONDS = 900  # 15 minutes
+
+# Seed _doc_store with persistent memory docs
+for m_id, m_doc in memory_store._docs.items():
+    _doc_store[m_id] = {
+        "filename": m_doc["filename"],
+        "text": m_doc["text"],
+        "bytes": b"",
+    }
+
+tool_registry = ToolRegistry(
+    gateway=gateway,
+    doc_store=_doc_store,
+    sandbox=sandbox,
+    download_store=_download_store,
+)
+agent_orchestrator = AgentOrchestrator(
+    gateway=gateway,
+    router=router,
+    sandbox=sandbox,
+    tool_registry=tool_registry,
+)
+
+# In-progress agent runs (for polling)
+_agent_runs: dict[str, dict] = {}   # run_id → {state, synthesis, done}
+
+print("[ARIA] v3.0 architecture initialized:")
+print(f"  -> Gateway:            default={DEFAULT_MODEL}, keep_alive=5m")
+print(f"  -> Router:             heuristic mode, {len(router.get_routing_table())} task types")
+print(f"  -> Sandbox:            timeout=5s, Python only")
+print(f"  -> Orchestrator (v2):  max_steps={Orchestrator.MAX_STEPS}")
+print(f"  -> AgentOrchestrator:  max_steps={AgentOrchestrator.MAX_STEPS}, max_replans={AgentOrchestrator.MAX_REPLANS}")
+print(f"  -> ToolRegistry:       {len(tool_registry.list_tools())} tools registered")
 
 # ─── STT: Load faster-whisper once at startup ──────────
 # base model, int8 quantized, on CPU so GPU stays free for Ollama
@@ -78,9 +122,9 @@ WHISPER_MODEL = WhisperModel(
 )
 print("[ARIA] faster-whisper STT model loaded (base, int8, CPU)")
 
-# ─── In-memory document store ──────────────────────────
-# { doc_id: { "filename": str, "text": str } }
-_doc_store: dict[str, dict] = {}
+# NOTE: _doc_store, _download_store, and DOWNLOAD_TTL_SECONDS
+# are now initialised above (before ToolRegistry) so the registry
+# holds a live reference to the same dict objects.
 
 # Models you have pulled locally via `ollama pull <name>`.
 # Now includes routing task info for the frontend.
@@ -190,6 +234,11 @@ def chat():
             decision = router.route(latest_text, has_image=has_image,
                                     force_model=model or DEFAULT_MODEL)
 
+        # ─── Memory Document Context (RAG) ───
+        memory_context, memory_sources = memory_store.format_prompt_context(latest_text)
+        if memory_context:
+            system_prompt = (system_prompt or "") + "\n\n" + memory_context
+
         # ─── Call via Gateway ───
         ollama_messages = [{"role": "system", "content": system_prompt}] + messages
 
@@ -202,6 +251,7 @@ def chat():
             "content": gw_response.content,
             "model": gw_response.model,
             "routing": decision.to_dict(),
+            "memory_sources": memory_sources,
             "usage": {
                 "input_tokens": gw_response.tokens_in,
                 "output_tokens": gw_response.tokens_out,
@@ -266,9 +316,15 @@ def orchestrate():
         return jsonify({"error": "No request provided."}), 400
 
     try:
+        memory_context, memory_sources = memory_store.format_prompt_context(user_request)
+        if memory_context:
+            system_prompt = (system_prompt or "") + "\n\n" + memory_context
+
         print(f"[Orchestrator] Starting multi-step workflow: {user_request[:80]}...")
         result = orchestrator.run(user_request, system_prompt=system_prompt)
-        return jsonify(result.to_dict())
+        res_dict = result.to_dict()
+        res_dict["memory_sources"] = memory_sources
+        return jsonify(res_dict)
 
     except GatewayError as e:
         return jsonify({"error": str(e)}), 502
@@ -363,7 +419,12 @@ def upload_doc():
         return jsonify({"error": text}), 422
 
     doc_id = str(uuid.uuid4())
-    _doc_store[doc_id] = {"filename": f.filename, "text": text}
+    # Store raw bytes too so the editor can re-serialise the file after edits
+    _doc_store[doc_id] = {
+        "filename": f.filename,
+        "text":     text,
+        "bytes":    file_bytes,
+    }
 
     print(f"[INFO] Document stored: {f.filename} ({len(text):,} chars) -- id={doc_id}")
     return jsonify({
@@ -372,6 +433,99 @@ def upload_doc():
         "char_count": len(text),
         "preview":    text[:300] + ("..." if len(text) > 300 else ""),
     })
+
+
+# ─── Memory Document Endpoints (Persistent Knowledge Base) ────
+@app.route("/api/memory/upload", methods=["POST"])
+def memory_upload():
+    """Upload a document directly to persistent memory so all chats have access."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file part in the request."}), 400
+
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "No file selected."}), 400
+
+    allowed_ext = {".pdf", ".txt", ".md", ".markdown", ".docx", ".rst", ".csv"}
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in allowed_ext:
+        return jsonify({"error": f"Unsupported file type '{ext}'. Allowed: PDF, TXT, MD, DOCX, CSV"}), 415
+
+    file_bytes = f.read()
+    text = _extract_text(f.filename, file_bytes)
+
+    if text.startswith("[ERROR]"):
+        return jsonify({"error": text}), 422
+
+    doc_meta = memory_store.save_document(f.filename, file_bytes, text)
+
+    # Also register in _doc_store so tools and agents have access
+    _doc_store[doc_meta["doc_id"]] = {
+        "filename": f.filename,
+        "text": text,
+        "bytes": file_bytes,
+    }
+
+    return jsonify({
+        "success": True,
+        "document": doc_meta,
+        "message": f"'{f.filename}' saved to persistent memory."
+    })
+
+
+@app.route("/api/memory/docs", methods=["GET"])
+def memory_list_docs():
+    """List all documents currently in persistent memory."""
+    return jsonify({
+        "documents": memory_store.list_documents()
+    })
+
+
+@app.route("/api/memory/docs/<doc_id>", methods=["GET"])
+def memory_get_doc(doc_id):
+    """Retrieve full details and text preview of a memory document."""
+    doc = memory_store.get_document(doc_id)
+    if not doc:
+        return jsonify({"error": "Document not found."}), 404
+    return jsonify({
+        "document": doc
+    })
+
+
+@app.route("/api/memory/docs/<doc_id>", methods=["DELETE"])
+def memory_delete_doc(doc_id):
+    """Remove a document from persistent memory."""
+    success = memory_store.delete_document(doc_id)
+    _doc_store.pop(doc_id, None)
+    if success:
+        return jsonify({"success": True, "message": "Document removed from memory."})
+    return jsonify({"error": "Document not found."}), 404
+
+
+@app.route("/api/memory/promote/<doc_id>", methods=["POST"])
+def memory_promote_doc(doc_id):
+    """Promote a session document from _doc_store to persistent memory."""
+    if doc_id not in _doc_store:
+        return jsonify({"error": "Document not found in current session."}), 404
+
+    doc = _doc_store[doc_id]
+    doc_meta = memory_store.save_document(
+        filename=doc["filename"],
+        file_bytes=doc.get("bytes", b""),
+        text=doc.get("text", "")
+    )
+    return jsonify({
+        "success": True,
+        "document": doc_meta,
+        "message": f"'{doc['filename']}' added to assistant memory."
+    })
+
+
+@app.route("/api/memory/clear", methods=["POST"])
+def memory_clear_docs():
+    """Clear all documents from memory store."""
+    count = memory_store.clear_documents()
+    return jsonify({"success": True, "cleared_count": count})
 
 
 # ─── Document Query (via Gateway) ─────────────────────
@@ -434,6 +588,112 @@ def doc_query():
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
 
+# ─── Document Edit ────────────────────────────────────
+@app.route("/api/doc-edit", methods=["POST"])
+def doc_edit():
+    """
+    Apply an AI-guided edit to an uploaded document, update the doc store,
+    create a download token, and return a summary + token.
+    """
+    if not gateway.is_available():
+        return jsonify({"error": "Ollama service is not running."}), 500
+
+    data        = request.get_json(silent=True) or {}
+    doc_id      = data.get("doc_id", "")
+    instruction = data.get("instruction", "").strip()
+    model       = data.get("model")
+
+    if not doc_id or doc_id not in _doc_store:
+        return jsonify({"error": "Document not found. Please re-upload your file."}), 404
+    if not instruction:
+        return jsonify({"error": "No instruction provided."}), 400
+
+    doc = _doc_store[doc_id]
+
+    # Build a simple LLM callable that routes through the Gateway
+    chosen_model = model or DEFAULT_MODEL
+    def llm_fn(prompt: str) -> str:
+        resp = gateway.call(chosen_model, [{"role": "user", "content": prompt}])
+        return resp.content
+
+    try:
+        result = apply_edit(
+            filename=doc["filename"],
+            file_bytes=doc["bytes"],
+            instruction=instruction,
+            llm_fn=llm_fn,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Edit failed: {str(e)}"}), 500
+
+    if not result.success:
+        return jsonify({"error": result.error or "Edit failed.", "details": result.to_dict()}), 422
+
+    # Update the doc store with the edited content
+    _doc_store[doc_id]["bytes"] = result.new_bytes
+    _doc_store[doc_id]["text"]  = result.new_text
+
+    # Purge expired download tokens
+    now = time.time()
+    expired = [t for t, v in _download_store.items() if v["expires"] < now]
+    for t in expired:
+        del _download_store[t]
+
+    # Create a fresh download token
+    token = str(uuid.uuid4())
+    _download_store[token] = {
+        "doc_id":   doc_id,
+        "filename": doc["filename"],
+        "bytes":    result.new_bytes,
+        "expires":  now + DOWNLOAD_TTL_SECONDS,
+    }
+
+    print(f"[INFO] Document edited: {doc['filename']} -- {result.summary}")
+    return jsonify({
+        "success":        True,
+        "summary":        result.summary,
+        "changes":        result.changes,
+        "download_token": token,
+        "filename":       doc["filename"],
+        "char_count":     len(result.new_text),
+    })
+
+
+# ─── Document Download ────────────────────────────────
+@app.route("/api/doc-download/<token>", methods=["GET"])
+def doc_download(token):
+    """Stream the edited document file as a download attachment."""
+    entry = _download_store.get(token)
+    if not entry:
+        return jsonify({"error": "Download token not found or expired."}), 404
+    if time.time() > entry["expires"]:
+        del _download_store[token]
+        return jsonify({"error": "Download token has expired. Please re-apply the edit."}), 410
+
+    filename  = entry["filename"]
+    file_bytes = entry["bytes"]
+
+    # Determine MIME type
+    ext = os.path.splitext(filename)[1].lower()
+    mime_map = {
+        ".csv":  "text/csv",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xls":  "application/vnd.ms-excel",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".txt":  "text/plain",
+        ".md":   "text/markdown",
+        ".rst":  "text/plain",
+    }
+    mime = mime_map.get(ext, "application/octet-stream")
+
+    return send_file(
+        io.BytesIO(file_bytes),
+        mimetype=mime,
+        as_attachment=True,
+        download_name="edited_" + filename,
+    )
+
+
 # ─── Speech-to-Text (faster-whisper) ──────────────────
 @app.route("/api/stt", methods=["POST"])
 def transcribe_audio():
@@ -463,39 +723,166 @@ def transcribe_audio():
         os.remove(tmp_path)  # clean up temp file regardless of success/failure
 
 
+# ─── Agent Run — POST /api/agent ──────────────────────
+@app.route("/api/agent", methods=["POST"])
+def agent_run():
+    """
+    Full agentic loop: Plan → Execute → Verify → Replan → Synthesize.
+
+    Request body:
+        {
+          "goal":   "Analyze the inspection report and create an approval note",
+          "files":  ["doc_id_1", "doc_id_2"],   # optional: pre-uploaded doc IDs
+          "system": "optional system context"
+        }
+
+    Response:
+        AgentState.to_dict() plus "synthesis" field.
+    """
+    if not gateway.is_available():
+        return jsonify({"error": "Ollama service is not running."}), 500
+
+    data          = request.get_json(silent=True) or {}
+    goal          = data.get("goal", "").strip()
+    file_ids      = data.get("files", [])   # list of doc_ids already in _doc_store
+    system_prompt = data.get("system")
+
+    if not goal:
+        return jsonify({"error": "No goal provided."}), 400
+
+    # Build uploaded_files dict from pre-uploaded documents
+    uploaded = {}
+    for fid in file_ids:
+        if fid in _doc_store:
+            uploaded[fid] = _doc_store[fid]
+
+    # Also include ALL currently uploaded docs if no specific files requested
+    if not file_ids:
+        uploaded = dict(_doc_store)
+
+    state = AgentState(goal=goal, uploaded_files=uploaded)
+
+    # Register this run for optional polling
+    _agent_runs[state.run_id] = {"state": state, "synthesis": None, "done": False}
+
+    try:
+        print(f"[Agent] Starting run {state.run_id[:8]} — goal: {goal[:80]}")
+        state, synthesis = agent_orchestrator.run(
+            goal, state, system_prompt=system_prompt
+        )
+
+        # Expose generated files as download tokens in the main _download_store
+        # (already done inside _store_generated via ToolRegistry, but re-sync here)
+        result = state.to_dict()
+        result["synthesis"] = synthesis
+
+        _agent_runs[state.run_id]["synthesis"] = synthesis
+        _agent_runs[state.run_id]["done"]      = True
+
+        return jsonify(result)
+
+    except GatewayError as e:
+        return jsonify({"error": str(e)}), 502
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Agent error: {str(e)}"}), 500
+
+
+# ─── Agent Status Polling ─────────────────────────────
+@app.route("/api/agent/status/<run_id>", methods=["GET"])
+def agent_status(run_id):
+    """Return current status of an agent run (for live progress updates)."""
+    run = _agent_runs.get(run_id)
+    if not run:
+        return jsonify({"error": "Run not found."}), 404
+    state: AgentState = run["state"]
+    result = state.to_dict()
+    result["synthesis"] = run.get("synthesis")
+    result["done"]      = run["done"]
+    return jsonify(result)
+
+
+# ─── Agent File Download ──────────────────────────────
+@app.route("/api/agent/download/<token>", methods=["GET"])
+def agent_download(token):
+    """Download a file generated by the agent (DOCX, PPTX, XLSX)."""
+    entry = _download_store.get(token)
+    if not entry:
+        return jsonify({"error": "Token not found or expired."}), 404
+    if time.time() > entry["expires"]:
+        del _download_store[token]
+        return jsonify({"error": "Token expired."}), 410
+
+    filename   = entry["filename"]
+    file_bytes = entry["bytes"]
+    ext        = os.path.splitext(filename)[1].lower()
+    mime_map   = {
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".csv":  "text/csv",
+        ".txt":  "text/plain",
+    }
+    mime = mime_map.get(ext, "application/octet-stream")
+    return send_file(
+        io.BytesIO(file_bytes),
+        mimetype=mime,
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+# ─── Tool Registry Info ───────────────────────────────
+@app.route("/api/tools", methods=["GET"])
+def tools_info():
+    """Return list of registered tools and recent tool call log."""
+    return jsonify({
+        "tools":    tool_registry.list_tools(),
+        "call_log": tool_registry.get_log(20),
+    })
+
+
 # ─── Run ──────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     ollama_status = "RUNNING" if gateway.is_available() else "NOT REACHABLE"
     print(f"""
-+-----------------------------------------------------------+
-|   ARIA v2.0 Backend - Multi-Model Architecture            |
-+-----------------------------------------------------------+
-|  URL:      http://localhost:{port}                           |
-|  Ollama:   {ollama_status:<48}|
-|  Provider: Ollama - 100% local, no internet               |
-|  Model:    {DEFAULT_MODEL:<48}|
-+-----------------------------------------------------------+
-|  Architecture:                                            |
-|    Gateway      -> unified model interface, VRAM mgmt     |
-|    Router       -> heuristic task-based model selection    |
-|    Orchestrator -> multi-step plan-execute-verify loop     |
-|    Sandbox      -> isolated code execution (5s timeout)    |
-+-----------------------------------------------------------+
-|  Endpoints:                                               |
-|    GET  /                 -> health check                  |
-|    GET  /api/health       -> detailed health + stats       |
-|    GET  /api/models       -> list models + routing table   |
-|    POST /api/chat         -> chat (Gateway + Router)       |
-|    POST /api/tool         -> one-shot tool (Gateway)       |
-|    POST /api/orchestrate  -> Deep Think (Orchestrator)     |
-|    POST /api/routing-info -> routing decisions & stats     |
-|    POST /api/upload-doc   -> upload document               |
-|    POST /api/doc-query    -> query document (Gateway)      |
-|    POST /api/stt          -> speech-to-text                |
-+-----------------------------------------------------------+
++---------------------------------------------------------------+
+|   ARIA v3.0 Backend — Full Agentic Architecture               |
++---------------------------------------------------------------+
+|  URL:      http://localhost:{port}                               |
+|  Ollama:   {ollama_status:<52}|
+|  Provider: Ollama - 100% local, no internet                   |
+|  Model:    {DEFAULT_MODEL:<52}|
++---------------------------------------------------------------+
+|  Architecture:                                                |
+|    Gateway           -> unified model interface, VRAM mgmt    |
+|    Router            -> heuristic task-based model selection   |
+|    ToolRegistry      -> 11 typed tools (OCR, docs, search...) |
+|    AgentOrchestrator -> Plan→Execute→Verify→Replan loop       |
+|    Sandbox           -> isolated code execution (10s timeout)  |
++---------------------------------------------------------------+
+|  Endpoints:                                                   |
+|    GET  /                      -> health check                |
+|    GET  /api/health            -> detailed health + stats     |
+|    GET  /api/models            -> list models + routing table |
+|    GET  /api/tools             -> tool registry info          |
+|    POST /api/chat              -> chat (Gateway + Router)     |
+|    POST /api/tool              -> one-shot tool (Gateway)     |
+|    POST /api/orchestrate       -> Deep Think (v2 Orchestrator)|
+|    POST /api/agent             -> Full Agent Mode (v3)        |
+|    GET  /api/agent/status/<id> -> live agent progress         |
+|    GET  /api/agent/download/<t>-> download generated file     |
+|    POST /api/routing-info      -> routing decisions & stats   |
+|    POST /api/upload-doc        -> upload document             |
+|    POST /api/doc-query         -> query document              |
+|    POST /api/doc-edit          -> edit document + return file |
+|    GET  /api/doc-download/<t>  -> download edited document    |
+|    POST /api/stt               -> speech-to-text             |
++---------------------------------------------------------------+
 
-Open index.html in Chrome/Edge to start ARIA.
+Open index.html in Chrome/Edge to start ARIA v3.0.
 """)
     if gateway.is_available():
         warm_up()
