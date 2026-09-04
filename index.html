@@ -177,6 +177,18 @@
 
     <main class="main">
 
+      <!-- ══ UNMUTE TTS BANNER ══ -->
+      <div class="unmute-banner" id="unmute-banner">
+        <button class="unmute-btn" id="unmute-btn" onclick="unmuteTTS()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+            <line x1="23" y1="9" x2="17" y2="15" />
+            <line x1="17" y1="9" x2="23" y2="15" />
+          </svg>
+          <span>Click to Enable Voice</span>
+        </button>
+      </div>
+
       <!-- ══ CHAT TAB ══ -->
       <section class="tab-panel active" id="tab-chat">
         <div class="panel-header">
@@ -225,6 +237,12 @@
           <div class="input-row">
             <textarea id="user-input" placeholder="Type a message or press Space / Speak button to use voice…" rows="1"
               onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+            <button class="deep-think-btn" id="deep-think-btn" onclick="toggleDeepThink()" title="Deep Think OFF — click to enable multi-step orchestration">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2h-4a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
+                <line x1="9" y1="21" x2="15" y2="21"/>
+              </svg>
+            </button>
             <button class="send-btn" id="send-btn" onclick="sendMessage()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="22" y1="2" x2="11" y2="13" />
@@ -235,6 +253,7 @@
           <div class="input-meta">
             <span>Enter to send · Shift+Enter new line · <kbd>Space</kbd> to activate mic</span>
             <span id="tts-indicator" style="color:var(--accent);display:none">🔊 Speaking…</span>
+            <span id="tts-muted-hint" class="tts-muted-hint">🔇 TTS muted — click Enable Voice above</span>
           </div>
         </div>
       </section>

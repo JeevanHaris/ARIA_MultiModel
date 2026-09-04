@@ -2050,3 +2050,192 @@ body {
     padding: 10px 16px;
   }
 }
+
+/* ─── Unmute TTS Banner ──────────────────────────────── */
+.unmute-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.1), rgba(167, 139, 250, 0.1));
+  border-bottom: 1px solid var(--border-accent);
+  backdrop-filter: blur(12px);
+  transition: all 0.4s ease;
+  overflow: hidden;
+  max-height: 60px;
+}
+
+.unmute-banner.hidden {
+  max-height: 0;
+  padding: 0 16px;
+  border-bottom-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.unmute-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 18px;
+  border: 1px solid var(--accent);
+  border-radius: 100px;
+  background: rgba(0, 229, 255, 0.08);
+  color: var(--accent);
+  font-family: 'Syne', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  animation: unmute-pulse 2s ease-in-out infinite;
+}
+
+.unmute-btn:hover {
+  background: rgba(0, 229, 255, 0.18);
+  box-shadow: 0 0 20px rgba(0, 229, 255, 0.2);
+  transform: scale(1.03);
+}
+
+.unmute-btn:active {
+  transform: scale(0.97);
+}
+
+@keyframes unmute-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.3); }
+  50% { box-shadow: 0 0 0 8px rgba(0, 229, 255, 0); }
+}
+
+.tts-muted-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  display: inline;
+}
+
+/* ─── Routing Badge (model pill on messages) ─────────── */
+.routing-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 10px;
+  font-family: 'DM Mono', monospace;
+  color: var(--text-dim);
+  margin-left: 6px;
+  vertical-align: middle;
+  transition: all 0.2s;
+  cursor: default;
+}
+
+.routing-badge:hover {
+  background: var(--accent-dim);
+  border-color: var(--border-accent);
+  color: var(--accent);
+}
+
+.deep-think-badge {
+  background: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.3);
+  color: #c084fc;
+}
+
+/* ─── Deep Think Toggle Button ───────────────────────── */
+.deep-think-btn {
+  width: 36px;
+  height: 36px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s;
+  flex-shrink: 0;
+}
+
+.deep-think-btn:hover {
+  background: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.3);
+  color: #c084fc;
+}
+
+.deep-think-btn.active {
+  background: rgba(168, 85, 247, 0.2);
+  border-color: rgba(168, 85, 247, 0.5);
+  color: #c084fc;
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.25);
+  animation: deep-think-glow 2s ease-in-out infinite;
+}
+
+.deep-think-btn.active svg {
+  stroke: #c084fc;
+  filter: drop-shadow(0 0 4px rgba(168, 85, 247, 0.5));
+}
+
+@keyframes deep-think-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(168, 85, 247, 0.2); }
+  50% { box-shadow: 0 0 16px rgba(168, 85, 247, 0.4); }
+}
+
+/* ─── Orchestrator Steps Visualization ───────────────── */
+.message.orchestrated {
+  border-left: 2px solid rgba(168, 85, 247, 0.4);
+  padding-left: 4px;
+}
+
+.orch-steps {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.orch-steps-header {
+  font-size: 12px;
+  font-family: 'DM Mono', monospace;
+  color: #c084fc;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.03em;
+}
+
+.orch-step {
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.orch-step:hover {
+  border-color: var(--border-accent);
+  background: rgba(0, 229, 255, 0.03);
+}
+
+.orch-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.orch-step-num {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'DM Mono', monospace;
+  color: var(--text-mid);
+}
+
+.orch-step-instruction {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}

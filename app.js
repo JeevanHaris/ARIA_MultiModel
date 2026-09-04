@@ -1,13 +1,15 @@
 /* ══════════════════════════════════════════════════════════════
    ARIA v2.0 — AI Voice Desktop Assistant · app.js
-   Full voice command engine + Groq Open-Source AI integration
+   Multi-Model Architecture: Gateway + Router + Orchestrator
 ══════════════════════════════════════════════════════════════ */
 
 // ─── Config ──────────────────────────────────────────────────
-const BACKEND_URL    = 'http://localhost:5000/api/chat';
-const MODELS_URL     = 'http://localhost:5000/api/models';
-const UPLOAD_DOC_URL = 'http://localhost:5000/api/upload-doc';
-const DOC_QUERY_URL  = 'http://localhost:5000/api/doc-query';
+const BACKEND_URL      = 'http://localhost:5000/api/chat';
+const ORCHESTRATE_URL  = 'http://localhost:5000/api/orchestrate';
+const MODELS_URL       = 'http://localhost:5000/api/models';
+const UPLOAD_DOC_URL   = 'http://localhost:5000/api/upload-doc';
+const DOC_QUERY_URL    = 'http://localhost:5000/api/doc-query';
+const STT_URL          = 'http://localhost:5000/api/stt';
 
 // ─── State ───────────────────────────────────────────────────
 const state = {
@@ -41,7 +43,9 @@ const state = {
     voiceRate: 1,
     voicePitch: 1,
     voiceName: '',
-  }
+  },
+  ttsMuted: true,  // starts muted — browsers block autoplay until user gesture
+  deepThink: false, // when true, sends to /api/orchestrate instead of /api/chat
 };
 
 // ─── WEBSITE MAP ─────────────────────────────────────────────
@@ -306,17 +310,30 @@ async function runVoiceCommand(rawText) {
   await sendToAIWithTyping(text);
 }
 
-// ─── SEND TO AI ───────────────────────────────────────
+// ─── SEND TO AI (Gateway + Router) ────────────────────
 async function sendToAIWithTyping(text) {
   const typingId = showTyping();
   setLoading(true);
   try {
-    const reply = await callAI(state.history);
-    removeTyping(typingId);
-    appendMessage('assistant', reply);
-    state.history.push({ role: 'assistant', content: reply });
-    speakText(stripMarkdown(reply));
-    autoExtractMemory(text, reply);
+    if (state.deepThink) {
+      // Orchestrator mode: multi-step plan-execute-verify
+      const result = await callOrchestrator(text);
+      removeTyping(typingId);
+      appendOrchestratorResult(result);
+      const reply = result.synthesis || 'No result generated.';
+      state.history.push({ role: 'assistant', content: reply });
+      speakText(stripMarkdown(reply));
+    } else {
+      // Standard mode: single-shot via Gateway + Router
+      const data = await callAI(state.history);
+      removeTyping(typingId);
+      const reply = data.content || data.text || JSON.stringify(data);
+      const routing = data.routing || null;
+      appendMessage('assistant', reply, routing);
+      state.history.push({ role: 'assistant', content: reply });
+      speakText(stripMarkdown(reply));
+      autoExtractMemory(text, reply);
+    }
   } catch (err) {
     removeTyping(typingId);
     appendMessage('assistant', `⚠ ${err.message}`);
@@ -359,19 +376,32 @@ function autoResize(el) {
   el.style.height = Math.min(el.scrollHeight, 160) + 'px';
 }
 
-// ─── SPEECH RECOGNITION ──────────────────────────────
-let recognition = null;
+// ─── SPEECH RECOGNITION (faster-whisper via /api/stt) ───
+let mediaRecorder = null;
+let audioChunks = [];
+let whisperStream = null;
+let whisperAudioCtx = null;
 
-function initRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) return null;
+async function startWhisperRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    whisperStream = stream;
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
 
-  const r = new SpeechRecognition();
-  r.continuous = false;
-  r.interimResults = true;
-  r.lang = 'en-US';
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
 
-  r.onstart = () => {
+    mediaRecorder.onstop = async () => {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      await sendToWhisper(audioBlob);
+      cleanupRecording();
+    };
+
+    mediaRecorder.start();
+
+    // Start listening UI
     state.isListening = true;
     document.getElementById('listen-overlay').classList.add('active');
     document.getElementById('listen-transcript').textContent = 'Listening…';
@@ -380,53 +410,123 @@ function initRecognition() {
     document.getElementById('big-mic')?.classList.add('listening');
     if (document.getElementById('big-mic-label'))
       document.getElementById('big-mic-label').textContent = 'Listening…';
-    document.getElementById('api-status').textContent = '🎤 Listening';
+    document.getElementById('api-status').textContent = '🎙️ Listening';
     document.getElementById('status-dot').style.background = 'var(--accent)';
     document.getElementById('status-dot').style.boxShadow = '0 0 8px var(--accent)';
-  };
 
-  r.onresult = (e) => {
-    let interim = '', final = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) final += e.results[i][0].transcript;
-      else interim += e.results[i][0].transcript;
-    }
-    document.getElementById('listen-transcript').textContent = final || interim || '…';
-    if (final) document.getElementById('listen-label').textContent = '✓ Got it!';
-  };
+    // Auto-stop on silence (1.5s of silence threshold)
+    startSilenceDetection(stream, 1500);
 
-  r.onend = () => {
-    const transcript = document.getElementById('listen-transcript').textContent;
+  } catch (err) {
+    console.error('[ARIA] Mic access error:', err);
+    appendMessage('assistant', `⚠ Mic error: ${err.message}. Please allow microphone access.`);
     stopListeningUI();
-    if (transcript && transcript !== 'Listening…' && transcript !== '…' && transcript !== 'Say a command or ask me anything…') {
-      removeWelcome();
-      runVoiceCommand(transcript);
-    }
-  };
+  }
+}
 
-  r.onerror = (e) => {
+function startSilenceDetection(stream, silenceThreshold) {
+  try {
+    const audioContext = new AudioContext();
+    whisperAudioCtx = audioContext;
+    const analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(stream);
+    source.connect(analyser);
+    analyser.fftSize = 512;
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    let silenceStart = null;
+
+    function checkSilence() {
+      if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+
+      analyser.getByteFrequencyData(dataArray);
+      const volume = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+
+      if (volume < 10) {
+        if (!silenceStart) silenceStart = Date.now();
+        else if (Date.now() - silenceStart > silenceThreshold) {
+          document.getElementById('listen-label').textContent = '✓ Got it!';
+          stopWhisperRecording();
+          return;
+        }
+      } else {
+        silenceStart = null;
+        // Update transcript to show we're hearing speech
+        document.getElementById('listen-transcript').textContent = 'Hearing you…';
+      }
+
+      requestAnimationFrame(checkSilence);
+    }
+    checkSilence();
+  } catch (e) {
+    console.warn('[ARIA] Silence detection unavailable:', e);
+  }
+}
+
+function stopWhisperRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+}
+
+function cleanupRecording() {
+  // Release mic tracks
+  if (whisperStream) {
+    whisperStream.getTracks().forEach(track => track.stop());
+    whisperStream = null;
+  }
+  // Close audio context
+  if (whisperAudioCtx) {
+    whisperAudioCtx.close().catch(() => {});
+    whisperAudioCtx = null;
+  }
+}
+
+async function sendToWhisper(audioBlob) {
+  document.getElementById('listen-transcript').textContent = 'Transcribing…';
+  document.getElementById('listen-label').textContent = '⚙️ Processing';
+  document.getElementById('api-status').textContent = 'Transcribing…';
+
+  const formData = new FormData();
+  formData.append('audio', audioBlob, 'recording.webm');
+
+  try {
+    const response = await fetch(STT_URL, {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) throw new Error(`STT failed: ${response.status}`);
+
+    const data = await response.json();
     stopListeningUI();
-    if (e.error !== 'aborted') {
-      appendMessage('assistant', `⚠ Mic error: ${e.error}. Please allow microphone access.`);
-    }
-  };
 
-  return r;
+    if (data.text && data.text.trim()) {
+      runVoiceCommand(data.text.trim());
+    } else {
+      appendMessage('assistant', '⚠ No speech detected — try again.');
+    }
+  } catch (err) {
+    console.error('[ARIA] STT error:', err);
+    stopListeningUI();
+    appendMessage('assistant', `⚠ Transcription failed: ${err.message}. Check that server.py is running.`);
+  }
 }
 
 function toggleListening() {
-  if (state.isListening) { stopListening(); return; }
-  if (!recognition) recognition = initRecognition();
-  if (!recognition) {
-    appendMessage('assistant', '⚠ Sorry, your browser does not support Speech Recognition. Try Chrome or Edge.');
+  if (state.isListening) {
+    stopWhisperRecording();
+    stopListeningUI();
+    cleanupRecording();
     return;
   }
-  try { recognition.start(); } catch (e) { console.warn('Recognition start error:', e); }
+  startWhisperRecording();
 }
 
 function stopListening() {
-  try { recognition?.stop(); } catch(e){}
+  stopWhisperRecording();
   stopListeningUI();
+  cleanupRecording();
 }
 
 function stopListeningUI() {
@@ -467,6 +567,12 @@ setTimeout(loadVoices, 500);
 function speakText(text) {
   if (!state.settings.voiceEnabled) return;
   if (!window.speechSynthesis) return;
+  if (state.ttsMuted) {
+    // Show hint that TTS is muted
+    const hint = document.getElementById('tts-muted-hint');
+    if (hint) hint.style.display = 'inline';
+    return;
+  }
   window.speechSynthesis.cancel();
   const utt = new SpeechSynthesisUtterance(text.slice(0, 500));
   utt.rate  = parseFloat(state.settings.voiceRate)  || 1;
@@ -478,6 +584,19 @@ function speakText(text) {
   utt.onstart = () => { if (ttsEl) ttsEl.style.display = 'block'; };
   utt.onend = utt.onerror = () => { if (ttsEl) ttsEl.style.display = 'none'; };
   window.speechSynthesis.speak(utt);
+}
+
+/** Unmute TTS — called from the "Enable Voice" banner button */
+function unmuteTTS() {
+  state.ttsMuted = false;
+  // Hide the unmute banner
+  const banner = document.getElementById('unmute-banner');
+  if (banner) banner.classList.add('hidden');
+  // Hide the muted hint
+  const hint = document.getElementById('tts-muted-hint');
+  if (hint) hint.style.display = 'none';
+  // Play the welcome greeting now that user has interacted
+  speakText(`Hello! I'm ${state.settings.assistantName}. Press Space or click Speak to give a voice command.`);
 }
 
 function testVoice() {
@@ -588,14 +707,14 @@ function copyNote() {
 
 function clearNote() { document.getElementById('notepad-area').value = ''; }
 
-// ─── API CALL (Groq Backend) ──────────────────────────
+// ─── API CALL (Gateway + Router) ──────────────────────
 async function callAI(messages) {
   const res = await fetch(BACKEND_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messages,
-      model: state.settings.model,
+      auto_route: true,          // let the Router pick the best model
       max_tokens: state.settings.maxTokens,
       system: buildSystemPrompt(),
     })
@@ -604,8 +723,23 @@ async function callAI(messages) {
     const e = await res.json().catch(() => ({}));
     throw new Error(e.error || `Backend error ${res.status}`);
   }
-  const data = await res.json();
-  return data.content || data.text || JSON.stringify(data);
+  return await res.json(); // returns { content, model, routing, usage, ... }
+}
+
+async function callOrchestrator(text) {
+  const res = await fetch(ORCHESTRATE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      request: text,
+      system: buildSystemPrompt(),
+    })
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.error || `Orchestrator error ${res.status}`);
+  }
+  return await res.json();
 }
 
 function buildSystemPrompt() {
@@ -615,18 +749,75 @@ function buildSystemPrompt() {
   return p;
 }
 
+// ─── DEEP THINK TOGGLE ────────────────────────────────
+function toggleDeepThink() {
+  state.deepThink = !state.deepThink;
+  const btn = document.getElementById('deep-think-btn');
+  if (btn) {
+    btn.classList.toggle('active', state.deepThink);
+    btn.title = state.deepThink ? 'Deep Think ON — multi-step orchestration' : 'Deep Think OFF — single model response';
+  }
+  flashAction(state.deepThink ? '🧠 Deep Think ON' : '⚡ Deep Think OFF');
+}
+
 // ─── RENDER MESSAGES ──────────────────────────────────
-function appendMessage(role, content) {
+function appendMessage(role, content, routing) {
   const win = document.getElementById('chat-window');
   const div = document.createElement('div');
   div.className = `message ${role}`;
   const label = role === 'user' ? 'You' : state.settings.assistantName;
   const avatar = role === 'user' ? 'U' : 'AI';
+
+  // Build routing badge for assistant messages
+  let routingBadge = '';
+  if (role === 'assistant' && routing && routing.model) {
+    const taskIcon = { code: '💻', reasoning: '🧠', general: '💬', vision: '👁', user_selected: '🎯' }[routing.task_type] || '🤖';
+    routingBadge = `<span class="routing-badge" title="${routing.reason || ''}">${taskIcon} ${routing.model}</span>`;
+  }
+
   div.innerHTML = `
     <div class="msg-avatar">${avatar}</div>
     <div class="msg-body">
-      <div class="msg-label">${label}</div>
+      <div class="msg-label">${label} ${routingBadge}</div>
       <div class="msg-bubble">${renderMarkdown(content)}</div>
+    </div>`;
+  win.appendChild(div);
+  win.scrollTop = win.scrollHeight;
+}
+
+/** Render an orchestrator result with step-by-step visualization */
+function appendOrchestratorResult(result) {
+  const win = document.getElementById('chat-window');
+  const div = document.createElement('div');
+  div.className = 'message assistant orchestrated';
+
+  let stepsHtml = '';
+  if (result.steps && result.steps.length > 0) {
+    stepsHtml = '<div class="orch-steps">';
+    stepsHtml += `<div class="orch-steps-header">🧠 Plan (${result.steps.length} steps · ${result.total_time?.toFixed(1) || '?'}s)</div>`;
+    for (const step of result.steps) {
+      const taskIcon = { code: '💻', reasoning: '🧠', general: '💬' }[step.task_type] || '🤖';
+      const statusIcon = step.error ? '❌' : (step.code_execution && !step.code_execution.success ? '⚠️' : '✅');
+      stepsHtml += `
+        <div class="orch-step">
+          <div class="orch-step-header">
+            <span class="orch-step-num">${statusIcon} Step ${step.step}</span>
+            <span class="routing-badge">${taskIcon} ${step.model || '?'}</span>
+          </div>
+          <div class="orch-step-instruction">${escHtml(step.instruction)}</div>
+        </div>`;
+    }
+    stepsHtml += '</div>';
+  }
+
+  const synthesis = result.synthesis || result.error || 'No result generated.';
+
+  div.innerHTML = `
+    <div class="msg-avatar">AI</div>
+    <div class="msg-body">
+      <div class="msg-label">${state.settings.assistantName} <span class="routing-badge deep-think-badge">🧠 Deep Think</span></div>
+      ${stepsHtml}
+      <div class="msg-bubble">${renderMarkdown(synthesis)}</div>
     </div>`;
   win.appendChild(div);
   win.scrollTop = win.scrollHeight;
@@ -1073,8 +1264,5 @@ document.addEventListener('DOMContentLoaded', () => {
   loadModels();
   loadVoices();
   document.getElementById('user-input').focus();
-
-  setTimeout(() => {
-    speakText(`Hello! I'm ${state.settings.assistantName}. Press Space or click Speak to give a voice command.`);
-  }, 800);
+  // Greeting is deferred to unmuteTTS() — browsers block autoplay without user gesture
 });
