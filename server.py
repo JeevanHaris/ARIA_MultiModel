@@ -362,7 +362,7 @@ def warm_up():
 
 # ─── Document Upload ──────────────────────────────────
 def _extract_text(filename: str, file_bytes: bytes) -> str:
-    """Extract plain text from PDF, DOCX, TXT, or MD file bytes."""
+    """Extract plain text from PDF, DOCX, XLSX, TXT, or MD file bytes."""
     ext = os.path.splitext(filename)[1].lower()
 
     if ext == ".pdf":
@@ -388,6 +388,16 @@ def _extract_text(filename: str, file_bytes: bytes) -> str:
         except Exception as e:
             return f"[ERROR] Could not read DOCX: {e}"
 
+    if ext in (".xlsx", ".xls"):
+        try:
+            import pandas as pd
+            df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+            return df.to_csv(index=False).strip()
+        except ImportError:
+            return "[ERROR] pandas/openpyxl not installed. Run: pip install pandas openpyxl"
+        except Exception as e:
+            return f"[ERROR] Could not read Excel file: {e}"
+
     if ext in (".txt", ".md", ".markdown", ".rst", ".csv"):
         try:
             return file_bytes.decode("utf-8", errors="replace").strip()
@@ -407,10 +417,10 @@ def upload_doc():
     if not f.filename:
         return jsonify({"error": "No file selected."}), 400
 
-    allowed_ext = {".pdf", ".txt", ".md", ".markdown", ".docx", ".rst", ".csv"}
+    allowed_ext = {".pdf", ".txt", ".md", ".markdown", ".docx", ".rst", ".csv", ".xlsx", ".xls"}
     ext = os.path.splitext(f.filename)[1].lower()
     if ext not in allowed_ext:
-        return jsonify({"error": f"Unsupported file type '{ext}'. Allowed: PDF, TXT, MD, DOCX"}), 415
+        return jsonify({"error": f"Unsupported file type '{ext}'. Allowed: PDF, TXT, MD, DOCX, XLSX, CSV"}), 415
 
     file_bytes = f.read()
     text = _extract_text(f.filename, file_bytes)
@@ -683,15 +693,238 @@ def doc_download(token):
         ".txt":  "text/plain",
         ".md":   "text/markdown",
         ".rst":  "text/plain",
+        ".pdf":  "application/pdf",
     }
     mime = mime_map.get(ext, "application/octet-stream")
+
+    # Use 'edited_' prefix only for doc edits; draft exports already have a proper name
+    doc_id = entry.get("doc_id")
+    dl_name = ("edited_" + filename) if doc_id else filename
 
     return send_file(
         io.BytesIO(file_bytes),
         mimetype=mime,
         as_attachment=True,
-        download_name="edited_" + filename,
+        download_name=dl_name,
     )
+
+
+# ─── Image OCR ───────────────────────────────────────
+@app.route("/api/ocr-image", methods=["POST"])
+def ocr_image_endpoint():
+    """
+    Accept an image upload, extract text via Tesseract OCR.
+    Falls back to LLaVA vision model if OCR yields < 20 characters.
+
+    Accepts multipart form with field 'file'.
+    Optional form field 'prompt' for a custom vision question.
+    Returns: { text, method, char_count, preview }
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided."}), 400
+
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "No file selected."}), 400
+
+    allowed_img = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif", ".webp"}
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in allowed_img:
+        return jsonify({"error": f"Unsupported image type '{ext}'. Allowed: PNG, JPG, BMP, TIFF, GIF, WEBP"}), 415
+
+    file_bytes = f.read()
+    custom_prompt = request.form.get("prompt", "").strip()
+
+    from multimodal import ocr_image, analyze_image_with_vision
+
+    # Step 1: Try Tesseract OCR
+    ocr_result = ocr_image(file_bytes)
+    method = "tesseract"
+    text = ""
+
+    if ocr_result.success and len(ocr_result.text.strip()) >= 20:
+        text = ocr_result.text
+    else:
+        # Step 2: Fall back to LLaVA vision model
+        if gateway.is_available():
+            vision_prompt = custom_prompt or (
+                "Please read and extract ALL text visible in this image. "
+                "List everything you can see written in the image, word for word."
+            )
+            text = analyze_image_with_vision(file_bytes, gateway, prompt=vision_prompt)
+            method = "llava-vision"
+        elif ocr_result.error:
+            return jsonify({"error": f"OCR failed: {ocr_result.error}"}), 500
+        else:
+            text = ocr_result.text or "[No text found in image]"
+
+    print(f"[OCR] {f.filename} → method={method}, chars={len(text)}")
+    return jsonify({
+        "text":       text,
+        "method":     method,
+        "char_count": len(text),
+        "preview":    text[:400] + ("..." if len(text) > 400 else ""),
+        "filename":   f.filename,
+    })
+
+
+# ─── Export Draft (Chat Reply → PDF or DOCX) ─────────
+@app.route("/api/export-draft", methods=["POST"])
+def export_draft():
+    """
+    Convert a text draft to a downloadable PDF or DOCX file.
+
+    Body: { "content": "...", "format": "pdf"|"docx", "title": "..." }
+    Returns: { download_token, filename }
+    """
+    data    = request.get_json(silent=True) or {}
+    content = data.get("content", "").strip()
+    fmt     = data.get("format", "pdf").lower()
+    title   = data.get("title", "ARIA Draft").strip() or "ARIA Draft"
+
+    if not content:
+        return jsonify({"error": "No content provided."}), 400
+    if fmt not in ("pdf", "docx"):
+        return jsonify({"error": "Format must be 'pdf' or 'docx'."}), 400
+
+    import datetime
+    date_str = datetime.date.today().isoformat()
+
+    try:
+        if fmt == "docx":
+            from doc_generator import generate_docx
+            doc_data = {
+                "title": title,
+                "author": "ARIA",
+                "date": date_str,
+                "sections": [{"heading": "", "body": content}],
+                "footer": f"Generated by ARIA — {date_str}",
+            }
+            file_bytes = generate_docx(doc_data)
+            filename   = f"{title.replace(' ', '_')}.docx"
+            mime       = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+        else:  # pdf
+            file_bytes = _generate_pdf(title, content, date_str)
+            filename   = f"{title.replace(' ', '_')}.pdf"
+            mime       = "application/pdf"
+
+    except Exception as e:
+        return jsonify({"error": f"Export failed: {str(e)}"}), 500
+
+    # Store in download_store
+    now   = time.time()
+    token = str(uuid.uuid4())
+    _download_store[token] = {
+        "doc_id":   None,
+        "filename": filename,
+        "bytes":    file_bytes,
+        "expires":  now + DOWNLOAD_TTL_SECONDS,
+    }
+
+    print(f"[Export] '{title}' → {fmt.upper()} ({len(file_bytes):,} bytes) token={token[:8]}")
+    return jsonify({
+        "download_token": token,
+        "filename":       filename,
+        "format":         fmt,
+        "byte_size":      len(file_bytes),
+    })
+
+
+def _generate_pdf(title: str, content: str, date_str: str) -> bytes:
+    """Generate a clean, styled PDF from plain text content using reportlab."""
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+        from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    except ImportError:
+        raise RuntimeError("reportlab not installed. Run: pip install reportlab")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=2.5 * cm,
+        rightMargin=2.5 * cm,
+        topMargin=2.5 * cm,
+        bottomMargin=2.5 * cm,
+    )
+
+    styles = getSampleStyleSheet()
+    accent = colors.HexColor("#00e5ff")
+    dark   = colors.HexColor("#0d1117")
+    mid    = colors.HexColor("#555577")
+
+    title_style = ParagraphStyle(
+        "ARIATitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=22,
+        textColor=dark,
+        spaceAfter=4,
+    )
+    meta_style = ParagraphStyle(
+        "ARIAMeta",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        textColor=mid,
+        spaceAfter=12,
+        alignment=TA_LEFT,
+    )
+    body_style = ParagraphStyle(
+        "ARIABody",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=11,
+        textColor=dark,
+        leading=17,
+        spaceAfter=8,
+    )
+    bullet_style = ParagraphStyle(
+        "ARIABullet",
+        parent=body_style,
+        leftIndent=18,
+        spaceAfter=4,
+    )
+
+    story = []
+    story.append(Paragraph(title, title_style))
+    story.append(Paragraph(f"Generated by ARIA &nbsp;·&nbsp; {date_str}", meta_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=accent, spaceAfter=14))
+
+    # Parse content lines into paragraphs / bullets
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            story.append(Spacer(1, 6))
+            continue
+        # Markdown-style headings
+        if stripped.startswith("### "):
+            story.append(Paragraph(f"<b>{stripped[4:]}</b>", ParagraphStyle(
+                "H3", parent=body_style, fontSize=12, spaceAfter=4, spaceBefore=10)))
+        elif stripped.startswith("## "):
+            story.append(Paragraph(f"<b>{stripped[3:]}</b>", ParagraphStyle(
+                "H2", parent=body_style, fontSize=14, spaceAfter=6, spaceBefore=12)))
+        elif stripped.startswith("# "):
+            story.append(Paragraph(f"<b>{stripped[2:]}</b>", ParagraphStyle(
+                "H1", parent=body_style, fontSize=16, spaceAfter=8, spaceBefore=14)))
+        elif stripped.startswith(("- ", "* ", "• ")):
+            story.append(Paragraph(f"• {stripped[2:]}", bullet_style))
+        else:
+            # Escape special XML chars for reportlab
+            safe = stripped.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            story.append(Paragraph(safe, body_style))
+
+    story.append(Spacer(1, 24))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=mid))
+    story.append(Paragraph("ARIA — Agentic AI Desktop Assistant", meta_style))
+
+    doc.build(story)
+    return buf.getvalue()
 
 
 # ─── Speech-to-Text (faster-whisper) ──────────────────

@@ -18,6 +18,10 @@ const MEMORY_UPLOAD_URL  = 'http://localhost:5000/api/memory/upload';
 const MEMORY_DOCS_URL    = 'http://localhost:5000/api/memory/docs';
 const MEMORY_PROMOTE_URL = 'http://localhost:5000/api/memory/promote';
 const MEMORY_CLEAR_URL   = 'http://localhost:5000/api/memory/clear';
+// New feature endpoints
+const OCR_IMAGE_URL    = 'http://localhost:5000/api/ocr-image';
+const EXPORT_DRAFT_URL = 'http://localhost:5000/api/export-draft';
+
 
 // ─── State ───────────────────────────────────────────────────
 const state = {
@@ -803,7 +807,14 @@ function appendMessage(role, content, routing, memorySources) {
     </div>`;
   win.appendChild(div);
   win.scrollTop = win.scrollHeight;
+
+  // Attach export button to assistant messages long enough to be worth exporting
+  if (role === 'assistant') {
+    const bubble = div.querySelector('.msg-bubble');
+    if (bubble) attachExportBtn(bubble, content);
+  }
 }
+
 
 /** Render an orchestrator result with step-by-step visualization */
 function appendOrchestratorResult(result) {
@@ -2032,3 +2043,295 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('user-input').focus();
   // Greeting is deferred to unmuteTTS() — browsers block autoplay without user gesture
 });
+
+
+// ══════════════════════════════════════════════════════════════
+//  FEATURE 1 — DOCUMENT STUDIO SUB-TABS
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Switch between Q&A/Edit and Image OCR sub-panels inside the Docs tab.
+ */
+function switchDocStudioTab(tab, btn) {
+  // Update button active state
+  document.querySelectorAll('.doc-studio-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+
+  const qaPanel  = document.getElementById('doc-qa-panel');
+  const ocrPanel = document.getElementById('doc-ocr-panel');
+
+  if (tab === 'qa') {
+    if (qaPanel)  qaPanel.style.display  = '';
+    if (ocrPanel) ocrPanel.style.display = 'none';
+  } else {
+    if (qaPanel)  qaPanel.style.display  = 'none';
+    if (ocrPanel) ocrPanel.style.display = '';
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  FEATURE 2 — IMAGE OCR
+// ══════════════════════════════════════════════════════════════
+
+// State for the current OCR session
+const ocrState = {
+  text: '',
+  filename: '',
+  method: '',
+};
+
+/** Handle file input change */
+function handleOCRFileSelect(event) {
+  const file = event.target.files[0];
+  if (file) runOCR(file);
+  event.target.value = ''; // reset so same file can be re-selected
+}
+
+/** Drag-over / leave / drop handlers for the OCR drop zone */
+function ocrDragOver(event) {
+  event.preventDefault();
+  document.getElementById('ocr-drop-area').classList.add('drag-over');
+}
+function ocrDragLeave(event) {
+  document.getElementById('ocr-drop-area').classList.remove('drag-over');
+}
+function ocrDrop(event) {
+  event.preventDefault();
+  document.getElementById('ocr-drop-area').classList.remove('drag-over');
+  const file = event.dataTransfer.files[0];
+  if (file) runOCR(file);
+}
+
+/**
+ * Upload image to /api/ocr-image, display result.
+ */
+async function runOCR(file, customPrompt = '') {
+  const statusEl  = document.getElementById('ocr-upload-status');
+  const resultEl  = document.getElementById('ocr-result-panel');
+  const uploadEl  = document.getElementById('ocr-upload-zone');
+
+  if (statusEl) statusEl.innerHTML = `<div class="doc-uploading"><div class="doc-spinner"></div><span>Extracting text from <strong>${escHtml(file.name)}</strong>…</span></div>`;
+
+  const formData = new FormData();
+  formData.append('file', file);
+  if (customPrompt) formData.append('prompt', customPrompt);
+
+  try {
+    const res  = await fetch(OCR_IMAGE_URL, { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok) {
+      if (statusEl) statusEl.innerHTML = `<div class="doc-error">⚠ ${escHtml(data.error || 'OCR failed.')}</div>`;
+      return;
+    }
+
+    // Store state
+    ocrState.text     = data.text || '';
+    ocrState.filename = data.filename || file.name;
+    ocrState.method   = data.method || 'tesseract';
+
+    // Populate result panel
+    const imgEl      = document.getElementById('ocr-preview-img');
+    const nameEl     = document.getElementById('ocr-filename');
+    const charEl     = document.getElementById('ocr-charcount');
+    const methodEl   = document.getElementById('ocr-method-badge');
+    const contentEl  = document.getElementById('ocr-text-content');
+
+    if (imgEl) {
+      const url = URL.createObjectURL(file);
+      imgEl.src = url;
+    }
+    if (nameEl)    nameEl.textContent   = ocrState.filename;
+    if (charEl)    charEl.textContent   = `${ocrState.text.length.toLocaleString()} characters extracted`;
+    if (methodEl) {
+      methodEl.textContent = ocrState.method === 'llava-vision' ? 'LLaVA Vision' : 'Tesseract OCR';
+    }
+    if (contentEl) contentEl.textContent = ocrState.text || '[No text found in image]';
+
+    // Show result, hide upload zone upload status
+    if (statusEl) statusEl.innerHTML = '';
+    if (resultEl) resultEl.style.display = '';
+    if (uploadEl) uploadEl.style.display  = 'none';
+
+  } catch (err) {
+    if (statusEl) statusEl.innerHTML = `<div class="doc-error">⚠ ${escHtml(err.message)}</div>`;
+  }
+}
+
+/** Re-ask using a custom question about the image */
+async function runOCRQuestion() {
+  const qInput = document.getElementById('ocr-question-input');
+  const runBtn = document.getElementById('ocr-run-btn');
+  const question = qInput ? qInput.value.trim() : '';
+
+  if (!question) return;
+
+  // If we have an image in the file input, re-upload with the new prompt
+  const fileInput = document.getElementById('ocr-file-input');
+  if (!fileInput || !fileInput.files[0]) {
+    // No file cached — tell user to re-upload
+    alert('Please re-upload the image to ask a new question.');
+    return;
+  }
+
+  if (runBtn) { runBtn.disabled = true; runBtn.textContent = '…'; }
+  await runOCR(fileInput.files[0], question);
+  if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Ask'; }
+  if (qInput) qInput.value = '';
+}
+
+/** Copy OCR text to clipboard */
+function copyOCRText() {
+  if (!ocrState.text) return;
+  navigator.clipboard.writeText(ocrState.text).then(() => {
+    const btn = event.currentTarget;
+    const orig = btn.innerHTML;
+    btn.innerHTML = '✓ Copied!';
+    setTimeout(() => { btn.innerHTML = orig; }, 1800);
+  });
+}
+
+/** Reset OCR panel back to upload zone */
+function resetOCRPanel() {
+  ocrState.text = ocrState.filename = ocrState.method = '';
+  const resultEl = document.getElementById('ocr-result-panel');
+  const uploadEl = document.getElementById('ocr-upload-zone');
+  const contentEl = document.getElementById('ocr-text-content');
+  const imgEl  = document.getElementById('ocr-preview-img');
+
+  if (resultEl) resultEl.style.display = 'none';
+  if (uploadEl) uploadEl.style.display  = '';
+  if (contentEl) contentEl.textContent  = '';
+  if (imgEl) imgEl.src = '';
+}
+
+/** Export OCR text as a draft document */
+function exportOCRasDraft() {
+  openExportModal(ocrState.text, ocrState.filename ? ocrState.filename.replace(/\.[^.]+$/, '') : 'OCR Text');
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  FEATURE 3 — EXPORT DRAFT (PDF / DOCX)
+// ══════════════════════════════════════════════════════════════
+
+// Store content being exported
+const exportState = {
+  content: '',
+  format: 'pdf',
+};
+
+/**
+ * Open the export modal pre-filled with content.
+ * @param {string} content  - The text to export.
+ * @param {string} suggestedTitle - Pre-fill the title input.
+ */
+function openExportModal(content, suggestedTitle = '') {
+  exportState.content = content;
+  exportState.format  = 'pdf';
+
+  const modal     = document.getElementById('export-draft-modal');
+  const titleIn   = document.getElementById('export-title-input');
+  const previewEl = document.getElementById('export-preview-text');
+  const statusEl  = document.getElementById('export-status');
+
+  if (titleIn)   titleIn.value       = suggestedTitle;
+  if (previewEl) previewEl.textContent = content.length > 600 ? content.slice(0, 600) + '…' : content;
+  if (statusEl)  statusEl.textContent  = '';
+
+  // Reset format selection
+  document.querySelectorAll('.export-fmt-btn').forEach(b => b.classList.remove('active'));
+  const pdfBtn = document.getElementById('export-fmt-pdf');
+  if (pdfBtn) pdfBtn.classList.add('active');
+
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeExportModal() {
+  const modal = document.getElementById('export-draft-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function selectExportFormat(fmt, btn) {
+  exportState.format = fmt;
+  document.querySelectorAll('.export-fmt-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+
+/**
+ * Call /api/export-draft and trigger file download.
+ */
+async function doExportDraft() {
+  const titleIn   = document.getElementById('export-title-input');
+  const statusEl  = document.getElementById('export-status');
+  const dlBtn     = document.getElementById('export-download-btn');
+
+  const title   = (titleIn && titleIn.value.trim()) || 'ARIA Draft';
+  const content = exportState.content;
+  const fmt     = exportState.format;
+
+  if (!content) {
+    if (statusEl) statusEl.textContent = '⚠ No content to export.';
+    return;
+  }
+
+  if (statusEl) statusEl.innerHTML = '<span style="color:var(--accent)">⏳ Generating…</span>';
+  if (dlBtn)    dlBtn.disabled = true;
+
+  try {
+    const res  = await fetch(EXPORT_DRAFT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, format: fmt, title }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      if (statusEl) statusEl.textContent = `⚠ ${data.error || 'Export failed.'}`;
+      return;
+    }
+
+    // Trigger download via the doc-download endpoint
+    const dlUrl = `${DOC_DOWNLOAD_URL}/${data.download_token}`;
+    const a = document.createElement('a');
+    a.href     = dlUrl;
+    a.download = data.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    if (statusEl) statusEl.innerHTML = `<span style="color:#34d399">✓ Downloading ${escHtml(data.filename)}</span>`;
+    setTimeout(closeExportModal, 1800);
+
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `⚠ ${err.message}`;
+  } finally {
+    if (dlBtn) dlBtn.disabled = false;
+  }
+}
+
+/**
+ * Add an "Export" button below an assistant chat message.
+ * Called from the chat rendering code when a new AI message arrives.
+ * @param {HTMLElement} bubbleEl  - The .bubble element for the AI message.
+ * @param {string} content        - Plain text content of the message.
+ */
+function attachExportBtn(bubbleEl, content) {
+  if (!bubbleEl || !content || content.length < 100) return;
+
+  const btn = document.createElement('button');
+  btn.className = 'msg-export-btn';
+  btn.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11">
+      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    Export as PDF / DOCX`;
+
+  btn.addEventListener('click', () => openExportModal(content, 'ARIA Response'));
+  bubbleEl.appendChild(btn);
+}
+
+

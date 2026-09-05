@@ -12,6 +12,8 @@
     href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap"
     rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="aria_features.css" />
+
 </head>
 
 <body>
@@ -462,8 +464,8 @@
       <section class="tab-panel" id="tab-docs">
         <div class="panel-header">
           <div>
-            <h1 class="panel-title">Document Q&amp;A</h1>
-            <p class="panel-sub">Upload a file &amp; ask questions about its content</p>
+            <h1 class="panel-title">Document Studio</h1>
+            <p class="panel-sub">Edit documents · Image OCR · Ask questions about files</p>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
             <button class="icon-btn" id="doc-clear-btn" onclick="clearDocSession()" title="Clear document"
@@ -477,6 +479,27 @@
           </div>
         </div>
 
+        <!-- Doc studio sub-tabs -->
+        <div class="doc-studio-tabs" id="doc-studio-tabs">
+          <button class="doc-studio-tab active" id="dst-qa" onclick="switchDocStudioTab('qa',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+            Q&amp;A &amp; Edit
+          </button>
+          <button class="doc-studio-tab" id="dst-ocr" onclick="switchDocStudioTab('ocr',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M8 7h1M15 7h1M8 17h8M12 7v10" />
+            </svg>
+            Image OCR
+          </button>
+        </div>
+
+        <!-- ── Q&A / Edit sub-panel ── -->
+        <div id="doc-qa-panel">
+
         <!-- Upload zone (shown when no doc loaded) -->
         <div class="doc-upload-zone" id="doc-upload-zone">
           <div class="doc-drop-area" id="doc-drop-area" onclick="document.getElementById('doc-file-input').click()"
@@ -489,7 +512,7 @@
               </svg>
             </div>
             <h3>Drop your document here</h3>
-            <p>or click to browse</p>
+            <p>or click to browse &nbsp;·&nbsp; <strong>Type a command to edit it</strong></p>
             <div class="doc-type-badges">
               <span class="doc-badge">PDF</span>
               <span class="doc-badge">TXT</span>
@@ -497,12 +520,16 @@
               <span class="doc-badge">MD</span>
               <span class="doc-badge">CSV</span>
               <span class="doc-badge doc-badge-edit">XLSX ✎</span>
+              <span class="doc-badge doc-badge-edit">XLS ✎</span>
             </div>
           </div>
           <input type="file" id="doc-file-input" accept=".pdf,.txt,.docx,.md,.markdown,.rst,.csv,.xlsx,.xls"
             style="display:none" onchange="handleDocFileSelect(event)" />
           <div class="doc-upload-status" id="doc-upload-status"></div>
         </div>
+
+        </div><!-- /doc-qa-panel -->
+
 
         <!-- Doc chat area (shown after doc loaded) -->
         <div class="doc-chat-container" id="doc-chat-container" style="display:none">
@@ -547,7 +574,7 @@
                 </svg>
               </div>
               <h3>Document loaded!</h3>
-              <p>Ask any question about your document below.</p>
+              <p>Ask any question, or <strong>tell ARIA to edit it</strong> — e.g. <em>"Remove the row for John"</em> or <em>"Change the title to Q3 Report"</em></p>
               <div class="quick-prompts" style="margin-top:16px">
                 <button class="quick-btn" onclick="sendDocQuick('Summarize this document')">📋 Summarize</button>
                 <button class="quick-btn" onclick="sendDocQuick('What are the key points?')">🔑 Key Points</button>
@@ -560,7 +587,7 @@
           <!-- Doc input -->
           <div class="input-zone">
             <div class="input-row">
-              <textarea id="doc-input" placeholder="Ask a question about your document…" rows="1"
+              <textarea id="doc-input" placeholder="Ask a question or give an edit instruction (e.g. 'Remove row where name is John')…" rows="1"
                 onkeydown="handleDocKey(event)" oninput="autoResize(this)"></textarea>
               <button class="send-btn" id="doc-send-btn" onclick="sendDocMessage()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -575,6 +602,81 @@
             </div>
           </div>
         </div>
+
+        <!-- ── Image OCR sub-panel ── -->
+        <div id="doc-ocr-panel" style="display:none">
+          <div class="ocr-upload-zone" id="ocr-upload-zone">
+            <div class="ocr-drop-area" id="ocr-drop-area"
+              onclick="document.getElementById('ocr-file-input').click()"
+              ondragover="ocrDragOver(event)" ondragleave="ocrDragLeave(event)" ondrop="ocrDrop(event)">
+              <div class="doc-drop-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <polyline points="21 15 16 10 5 21" />
+                </svg>
+              </div>
+              <h3>Drop an image here</h3>
+              <p>or click to browse &nbsp;·&nbsp; Extracts all text via OCR</p>
+              <div class="doc-type-badges">
+                <span class="doc-badge">PNG</span>
+                <span class="doc-badge">JPG</span>
+                <span class="doc-badge">WEBP</span>
+                <span class="doc-badge">BMP</span>
+                <span class="doc-badge">TIFF</span>
+                <span class="doc-badge">GIF</span>
+              </div>
+            </div>
+            <input type="file" id="ocr-file-input"
+              accept=".png,.jpg,.jpeg,.bmp,.tiff,.tif,.gif,.webp"
+              style="display:none" onchange="handleOCRFileSelect(event)" />
+            <div class="ocr-upload-status" id="ocr-upload-status"></div>
+          </div>
+
+          <!-- OCR result area -->
+          <div class="ocr-result-panel" id="ocr-result-panel" style="display:none">
+            <!-- Image preview + info banner -->
+            <div class="ocr-info-banner" id="ocr-info-banner">
+              <img id="ocr-preview-img" class="ocr-preview-img" src="" alt="Uploaded image" />
+              <div class="ocr-info-text">
+                <span class="doc-info-name" id="ocr-filename">image.png</span>
+                <span class="doc-info-chars" id="ocr-charcount"></span>
+                <span class="ocr-method-badge" id="ocr-method-badge">Tesseract OCR</span>
+              </div>
+              <div style="display:flex;gap:8px;margin-left:auto">
+                <button class="doc-download-btn" onclick="copyOCRText()" title="Copy extracted text">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                  </svg>
+                  Copy Text
+                </button>
+                <button class="doc-download-btn" onclick="exportOCRasDraft()" title="Export OCR text as PDF/DOCX">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  Export
+                </button>
+                <button class="doc-remove-btn" onclick="resetOCRPanel()">✕ Clear</button>
+              </div>
+            </div>
+
+            <!-- Custom question / re-run -->
+            <div class="ocr-question-row">
+              <input type="text" id="ocr-question-input"
+                placeholder="Ask a question about this image (e.g. 'What is the total amount?')…" />
+              <button class="run-btn" onclick="runOCRQuestion()" id="ocr-run-btn">Ask</button>
+            </div>
+
+            <!-- Extracted text display -->
+            <div class="ocr-text-box" id="ocr-text-box">
+              <pre id="ocr-text-content"></pre>
+            </div>
+          </div>
+        </div>
+
       </section>
 
       <!-- ══ MEMORY & KNOWLEDGE BASE TAB ══ -->
@@ -923,7 +1025,63 @@
     </div>
   </div>
 
+  <!-- Export Draft Modal -->
+  <div class="modal-overlay" id="export-draft-modal" style="display:none"
+    onclick="if(event.target===this)closeExportModal()">
+    <div class="export-modal-box">
+      <div class="calc-header">
+        <span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"
+            style="vertical-align:middle;margin-right:6px">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>Export as Document
+        </span>
+        <button onclick="closeExportModal()">✕</button>
+      </div>
+      <div class="export-modal-body">
+        <label class="export-label">Document Title</label>
+        <input type="text" id="export-title-input" class="export-input"
+          placeholder="e.g. Meeting Summary, Project Report…" />
+
+        <label class="export-label" style="margin-top:14px">Export Format</label>
+        <div class="export-format-row">
+          <button class="export-fmt-btn active" id="export-fmt-pdf" onclick="selectExportFormat('pdf',this)">
+            <span class="export-fmt-icon">📄</span>
+            <span class="export-fmt-label">PDF</span>
+            <span class="export-fmt-sub">Universal, print-ready</span>
+          </button>
+          <button class="export-fmt-btn" id="export-fmt-docx" onclick="selectExportFormat('docx',this)">
+            <span class="export-fmt-icon">📝</span>
+            <span class="export-fmt-label">DOCX</span>
+            <span class="export-fmt-sub">Editable Word document</span>
+          </button>
+        </div>
+
+        <div class="export-preview-box" id="export-preview-box">
+          <div class="export-preview-label">Content Preview</div>
+          <pre id="export-preview-text" class="export-preview-text"></pre>
+        </div>
+
+        <div class="export-modal-actions">
+          <button class="run-btn" id="export-download-btn" onclick="doExportDraft()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Download
+          </button>
+          <button class="doc-remove-btn" onclick="closeExportModal()">Cancel</button>
+        </div>
+        <div class="export-status" id="export-status"></div>
+      </div>
+    </div>
+  </div>
+
   <script src="webthreads.js"></script>
+
   <script>
     document.addEventListener("DOMContentLoaded", () => {
       new WebThreads("webThreadsCanvas");
